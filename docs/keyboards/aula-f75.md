@@ -479,7 +479,9 @@ avec un **programmateur CH341** (~5 €), en mode « Beken SPI » et non génér
 relié à CEN** pour piloter le reset. C'est nettement plus accessible que le Raspberry/Banana Pi de
 l'article d'origine, ou que le dongle vendeur.
 
-**⚠️ Aucun outil communautaire ne prend en charge la famille BK3xxx.** Vérifié :
+**⚠️ Aucun outil ne *déclare* la famille BK3xxx — mais le code d'entrée SPI est générique.**
+
+Vérifié :
 [`BK7231GUIFlashTool`](https://github.com/openshwprojects/BK7231GUIFlashTool) (428 ★, maintenu,
 dernier push 2026-08-10) liste ses modes — BK7231M/N/T/U, BK7236, BK7238, BK7252, BK7252N, BK7258,
 « Beken SPI CH341 » et « Generic SPI CH341 » — soit **uniquement la famille WiFi BK72xx**. Une
@@ -488,6 +490,41 @@ recherche de `BK3xxx` dans l'intégralité de ses sources C# ne renvoie **aucune
 Le mode « Generic SPI CH341 » sert à lire une flash SPI *externe* (boîtier SOIC8). Celle du BK3632
 est **interne** : il faudrait la séquence d'entrée en mode esclave SPI, qui est spécifique à la
 famille BK72xx.
+
+#### Nuance : l'entrée SPI Beken est paramétrable
+
+`BK7231Flasher/Flashers/SPIFlasher_Beken.cs` fait **90 lignes** et se révèle largement agnostique :
+
+```csharp
+ChipReset()                  // CEN bas via D2 du CH341 -> 100 ms -> CEN haut
+BK_EnterSPIMode(byte data)   // <-- l'octet magique est un PARAMÈTRE
+    // envoie `data` x 250 (10 blocs de 25)
+    // puis 9F 00 00 00
+    // succès si resp[0] != 0x00 ET resp[1..3] == 0x00
+    // puis vidange : 25 000 zéros
+Sync()                       // 10 tentatives de (reset + entrée), 1 s d'intervalle
+```
+
+Deux points comptent :
+
+1. **`0xD2` n'est pas codé en dur** — c'est l'argument de `BK_EnterSPIMode`. Essayer une autre
+   valeur est une modification d'une ligne.
+2. **Le test de succès ne vérifie pas l'ID `00 15 70 1C`** — seulement « premier octet non nul,
+   trois suivants nuls ». Il accepterait donc l'identifiant d'une autre puce.
+
+L'outil ne *déclare* pas la famille BK3xxx, mais rien dans ce chemin ne l'exclut techniquement.
+**Tenter coûte un CH341 (~5 €) et une modification triviale.**
+
+#### Ce qui reste incertain
+
+- Le BK3632 expose-t-il seulement un mode esclave SPI ? Non établi.
+- La doc Tuya du BK3432 mentionne **VPP sur RST**, ce qui suggère un mécanisme différent d'un
+  simple basculement de CEN — possiblement une tension de programmation.
+- Les broches SPI diffèrent déjà entre BK7231 (`P20`-`P23`) et BK3432 (`P0.4`-`P0.7`). Celles du
+  BK3632 sont inconnues.
+
+*(`BK7231Flasher.cs` lui-même est le protocole **bootloader UART** du BK72xx — trames
+`01 e0 fc <len> <cmd>` — sans rapport avec la voie SPI.)*
 
 **La transposition à la famille BK34xx n'est PAS établie.** La question a été posée
 textuellement sur ce fil le 21 juillet 2025 — « I have a bk3432 chip […] is the initialization
