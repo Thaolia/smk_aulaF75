@@ -1188,6 +1188,89 @@ firmware de distinguer un bloc écrit d'une page effacée.
 > parmi les sept pages non vierges relevées à l'analyse d'entropie de la zone IAP. Les deux
 > observations, faites indépendamment, se rejoignent.
 
+#### Cartographie du bloc
+
+La longueur est confirmée des deux côtés : `fn.fx_init` (`0xA292`) et `fcn.0000A5AD` (`0xA5B5`)
+appellent `fcn.0000A611` avec les mêmes arguments — `r4:r5 = 0x09BF`, `r3:r2 = 0x0080`,
+`r6:r7 = 0xC600`. **128 octets**, dans les deux sens.
+
+**22 offsets sur 128 sont adressés directement** par `mov dptr, #0x03NN`, tous entre 0 et 32.
+Le reste n'est atteint que par pointeur calculé.
+
+| Off | XRAM | Dump | Refs | Ce que le firmware en fait |
+| --- | --- | --- | --- | --- |
+| 0 | `0x030D` | `00` | 20 | lu très largement |
+| 1 | `0x030E` | `03` | 4 | compteur décrémenté puis testé (`0x88D9`, `0x88E7`) |
+| 3 | `0x0310` | `02` | 1 | `fcn.00003108` : borne de balayage → `IDATA 0x0E` |
+| 5 | `0x0312` | `00` | 6 | drapeau (`jz`) |
+| 6 | `0x0313` | `04` | 4 | recopié vers `0x0D19` |
+| 7 | `0x0314` | `04` | 2 | recopié vers `0x0D9D` |
+| 8 | `0x0315` | `07` | 4 | champ compacté (`anl #0x0F`, `anl #0x80`) |
+| 9 | `0x0316` | `00` | 13 | **source de `XRAM 0x009D`** — l'effet RGB |
+| 10 | `0x0317` | `04` | 11 | plage 0–14 (`cjne a, #0x0E`) |
+| 11 | `0x0318` | `20` | 3 | apparié à l'offset 10 dans `fn.fx_init` et `fcn.0000A069` |
+| **12** | `0x0319` | `01` | 16 | **slot Bluetooth** |
+| **14** | `0x031B` | `00` | 57 | **transport actif** |
+| 15 | `0x031C` | `00` | 2 | écrit en `0x4197`, lu par `fcn.00008FA7` |
+| 16 | `0x031D` | `00` | 2 | idem, `0x41AC` / `0x8FDA` |
+| 17 | `0x031E` | `00` | 1 | lu par `fcn.00008FA7` |
+| 18 | `0x031F` | `00` | 3 | reçoit `0x0D16` quand la classe d'action vaut 9 |
+| 22 | `0x0323` | `00` | 3 | drapeau |
+| 24 | `0x0325` | `02` | 1 | lu par `fcn.00008FA7` |
+| 26 | `0x0327` | `00` | 8 | drapeau |
+| 27 | `0x0328` | `00` | 23 | testé `cjne a, #0x01` |
+| 28 | `0x0329` | `01` | 1 | compteur cyclique modulo 4 (`0x84C6`) |
+| 32 | `0x032D` | `00` | 2 | |
+
+Les offsets 2, 4, 13, 19–21, 23, 25, 29–31 n'ont aucune référence directe et valent 0 dans le
+dump : réservés, ou atteints uniquement par le protocole de configuration.
+
+#### Deux tableaux, adressés par pointeur calculé
+
+Une recherche du motif `mov DPL,a ; mov a,#0x03 ; addc a,rX ; mov DPH,a` donne les bases :
+
+| Base | Offset | Pas | Index vérifié |
+| --- | --- | --- | --- |
+| `0x0345` / `0x0346` | 56 / 57 | **2** | `[0x009D] × 2` en `0x1166`, `0x8F5F`, `0x93F0` |
+| `0x0362` | 85 | 1 | `[0x009D]` en `0x114E` |
+
+Le tableau à pas 2 est un **enregistrement de deux octets par effet**, dont les champs sont
+compactés :
+
+```asm
+0x1170  movx a,@dptr ; rlc a ; mov 0x24.3, c   ; bit 7 de l'octet 0 -> drapeau 0x24.3
+0x117E  movx a,@dptr ; anl a,#0x0f             ; quartet bas de l'octet 1 -> 0x011C
+0x8F6A  movx a,@dptr ; anl a,#0x8f             ; bits 7 et 3-0 de l'octet 1
+```
+
+Et la queue du dump montre exactement cette régularité par paires :
+
+```
+off 56   ff ff
+off 58   09 34 | 09 37 | 09 37 | 09 37 | 09 37 | 09 37
+off 70   00 34 | 09 37 x13
+off 98   07 47 | 07 47 | 07 44 x8
+off 116  04 09 | 04 04 x5
+off 126  5a a5
+```
+
+#### Une tension que je ne résous pas
+
+`XRAM 0x009D` est **0x20-basé** — il est écrit avec `#0x20` (`0x4494`), `#0x26` (`vec.reset`
+@ `0x9188`, la valeur par défaut) et `#0x2D` (`0xA48F`). L'index `[0x009D] × 2` place donc les
+enregistrements des effets `0x20` et au-delà aux offsets 120 et suivants — alors que la structure
+par paires est visible dès l'offset 58, c'est-à-dire pour des index bien inférieurs à `0x20`.
+
+Deux lectures restent possibles et je n'ai pas de quoi trancher :
+
+- le tableau est indexé **par une autre clé** sur les sites que je n'ai pas inspectés
+  (`0x118F`, `0x79C9`, `0x7A5F` sont dans `fcn.00007928`, un tout autre contexte) ;
+- ou seuls les derniers enregistrements servent au chemin RGB, le reste appartenant à autre chose.
+
+De même, `5A A5` en queue (`0101 1010` / `1010 0101`, complémentaires) a tout d'un **marqueur de
+validité** — mais tombe aussi pile sur l'enregistrement d'index 35 du tableau à pas 2. Je le
+signale sans trancher.
+
 ### Réception : parser et format des réponses
 
 La réception se fait en **deux étages**.
