@@ -488,7 +488,80 @@ l'ordre et le contexte. Le firmware maison permet d'*interroger* le BK3632 libre
 des commandes que l'usine n'émet jamais. Commencer par la sonde externe reste plus sage : elle
 donne la vérité de terrain sans rien risquer.
 
-#### B. Dumper le firmware du BK3632 — beaucoup plus lourd
+#### B-bis. Le bootloader UART Beken — la voie la plus prometteuse pour un dump
+
+⚠️ **On n'a pas le firmware du BK3632.** Il est dans la puce ; l'obtenir *est* le but de cette
+section. Ce qui suit vient du SDK **BK3432** (`Cdreamyao/tuya_ble_sdk_Demo_Project_bk3432`), pas
+d'un dump.
+
+##### Le BIM expose un bootloader UART
+
+`bk3432/projects/bim/app/bim_uart.h` déclare :
+
+```c
+typedef enum _UART_CMD_STATE {
+    UART_CMD_STATE_HEAD, UART_CMD_STATE_OPCODE_ONE, UART_CMD_STATE_OPCODE_TWO,
+    UART_CMD_STATE_LENGTH, UART_CMD_STATE_CMD, UART_CMD_STATE_CMD_FLASH,
+    UART_CMD_STATE_LENGTH_FLASH_LEN0, UART_CMD_STATE_LENGTH_FLASH_LEN1,
+    UART_CMD_STATE_LENGTH_FLASH_SCMD, UART_CMD_STATE_PAYLOAD, ...
+} UART_CMD_STATE;
+
+#define LINK_CHECK_CMD     0x00
+#define CRC_CHECK_CMD      0x10
+#define SET_RESET_CMD      0x0E
+#define SET_BAUDRATE_CMD   0x0F
+#define STAY_ROM_CMD       0xAA
+```
+
+Trame : `HEAD, OPCODE_ONE, OPCODE_TWO, LENGTH, CMD, [payload]`, avec des sous-états dédiés aux
+commandes flash.
+
+##### Ce sont les MÊMES codes que le BK7231
+
+`BK7231GUIFlashTool/BK7231Flasher/Flashers/BK7231Flasher.cs` construit ses trames ainsi :
+
+```csharp
+ret[0] = 0x01; ret[1] = 0xe0; ret[2] = 0xfc; ret[3] = len; ret[4] = cmd;
+enum CommandCode { LinkCheck = 0, ..., CheckCRC = 0x10, SetBaudRate = 0x0f, ... }
+```
+
+`HEAD = 0x01`, `OPCODE_ONE = 0xE0`, `OPCODE_TWO = 0xFC` — exactement les états nommés du BK3432.
+Et `LinkCheck = 0x00`, `SetBaudRate = 0x0F`, `CheckCRC = 0x10` **coïncident avec les `#define` du
+BIM**.
+
+**La famille Beken partage donc son protocole de bootloader UART.**
+
+##### Pourquoi cela change la voie B
+
+| | Voie SPI (décrite plus haut) | Voie UART |
+| --- | --- | --- |
+| Matériel | CH341 (~5 €) | **adaptateur USB-TTL (~3 €)** |
+| Accès physique | pads SPI + CEN + VPP d'un **QFN32** | **les lignes UART, déjà localisées** |
+| Séquence d'entrée | inconnue pour le BK3632 | codes connus, à tenter |
+| Dessoudage | probable | **non** |
+
+Les lignes UART sont celles reliant le 8051 au BK3632 — les mêmes qu'on sonderait pour écouter le
+dialogue (voie A). **Un seul point d'accès physique sert aux deux usages.**
+
+Config UART du BIM, relevée dans `bim_uart.c` : **115200 bauds, 8 bits, parité PAIRE, 1 stop**
+(`data_len 0x3`, `parity_en 0x1`, `parity_mode 0x1`, `stop_bits 0x0`). La parité paire est
+inhabituelle, donc discriminante : si un `01 E0 FC 01 00` en 8E1 obtient une réponse, on est dans
+le bootloader.
+
+Le SDK embarque aussi `bk3432/doc/BK3432 Download by UART User's Guide V3.0.pdf`, qui **contredit
+la doc Tuya** (« BK3432 only supports firmware flashing through SPI »).
+
+##### Ce qui reste incertain
+
+- Le `uart_cmd_dispath()` n'est **pas** dans les sources livrées — il est déclaré dans le header
+  mais réside vraisemblablement en ROM. Les codes viennent du header et du recoupement BK7231.
+- Le BK3632 n'est pas le BK3432.
+- Entrer dans le bootloader suppose que la puce reste en ROM au démarrage — `STAY_ROM_CMD 0xAA`
+  suggère un mécanisme, non documenté ici.
+- Sur le clavier, l'UART du BK3632 est reliée au 8051 : il faudrait probablement empêcher celui-ci
+  de parler pendant la tentative.
+
+#### B. Dumper le firmware du BK3632 par SPI — plus lourd
 
 Le BK3632 est un **ARM9**, 20 Ko de RAM, 160 Ko de flash, BLE 5.0 + 2.4 G propriétaire.
 
