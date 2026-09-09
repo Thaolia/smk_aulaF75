@@ -1677,6 +1677,11 @@ Vérification sur le dump, en supposant `0x0896` = index d'effet :
 | `0x20` | `0xCAA0` | 101 | tout noir |
 | `0x2D` | `0xCBB1` | 101 | tout noir |
 
+> **Réserve.** Les noms de couleurs ci-dessus supposent que l'octet `+0` d'une entrée est le rouge.
+> C'est **non prouvé** : les trois composantes sont `0x011D` (`+0`), `0x0000` (`+1`) et `0x0E25`
+> (`+2`), et rien n'établit laquelle est le rouge. Voir *Les deux tables de couleur n'ont pas le
+> même ordre d'octets*.
+
 Les quinze effets de la famille A portent chacun leur palette de sept couleurs, toutes réglées
 sur la palette d'usine ; ceux de la famille B sont à zéro — ils n'utilisent pas de palette, ce qui
 est cohérent avec leur maximum de couleur plus bas (4 au lieu de 7). Les adresses tombent
