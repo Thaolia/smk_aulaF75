@@ -856,6 +856,11 @@ mais deux chemins gardés indépendamment.
 
 #### `0x2D.4` — le bit qui coupe l'USB
 
+> **Correction.** J'ai d'abord présenté `0x2D.4` comme « l'interrupteur radio/USB ». C'est exact
+> quant à son **effet**, faux quant à sa **cause** : il n'est pas posé par un choix de mode mais
+> par une hystérésis sur une grandeur analogique reçue de la radio (voir `fcn.00001DC3` plus
+> bas). Le sélecteur de mode, lui, est plutôt `XRAM 0x031B`.
+
 `fcn.0000EF7B` tient en dix octets :
 
 ```asm
@@ -944,6 +949,113 @@ matrice — cohérent.
 jb  0x2c.1, ret     ; une emission est deja en cours
 jnb 0xb0.7, ret     ; le module radio n'est pas pret
 ```
+
+### Les trois fonctions du sous-système : `1DC3`, `44F6`, `6ACF`
+
+| Fonction | Taille | Blocs | Rôle |
+| --- | --- | --- | --- |
+| `fcn.00001DC3` | 2700 o | 219 | gestion d'énergie — **seul écrivain de `0x2D.4`** |
+| `fcn.000044F6` | 844 o | 53 | émetteur de rapports vers la radio |
+| `fcn.00006ACF` | 460 o | 33 | dispatcher de rapports vers l'USB |
+
+#### `fcn.00001DC3` — une hystérésis, pas un sélecteur de mode
+
+Appelée depuis un seul site (`fcn.00008FA7` @ `0x8FE6`). Ses gardes d'entrée mènent à quatre
+sous-chemins ; celui qui pilote `0x2D.4` est atteint quand `0x26.0` est **clair** :
+
+```asm
+0x1f05  ; compare 16 bits [0x02E6]:[0x02E7] a 0x02E1 = 737
+        jc 0x1f17                       ; valeur < 737
+0x1f14  jnb 0x2d.4, 0x1f2e              ; sinon, remet le compteur a zero
+0x1f17  [0x097b]++ ; si >= 0xC8 (200) :
+0x1f25     setb 0x2d.4                  ; <== bascule
+0x1f27     setb 0x29.1 ; lcall fcn.0000EE6A
+
+0x1f33  ; compare la meme valeur a 0x0390 = 912
+0x1f43  [0x097f]++ ; si >= 0x64 (100) :
+0x1f50     clr 0x2d.4                   ; <== retour
+0x1f52     clr 0x2b.3
+```
+
+Deux seuils, deux compteurs anti-rebond, une bande morte de 737 à 912 : c'est une **hystérésis**,
+pas une commutation.
+
+**D'où vient la grandeur mesurée.** `XRAM 0x02E6:0x02E7` est écrit par **`euart0.parse`**
+(`0x0677`, `0x0683`, `0x0691`) depuis l'octet en `XRAM 0x0127` — l'**offset 7 de la trame reçue**
+recopiée en `0x0120` — et initialisé à `0x03xx` par `vec.reset` (`0x9136`). La valeur vient donc
+du **BK3632**, pas du 8051.
+
+Ce qui est cohérent avec le silicium : le SH68F90 **n'a pas d'ADC**. La datasheet ne lui donne
+qu'un détecteur de sous-tension (`LPDCON` 0xB3, `LPDSEL` 0x89). Une mesure analogique ne peut
+venir que de la radio.
+
+`fcn.00001DC3` compare cette valeur à **quatre seuils** échelonnés :
+
+| Site | Seuil | Décimal |
+| --- | --- | --- |
+| `0x1F06` | `0x02E1` | 737 |
+| `0x23D8` | `0x030D` | 781 |
+| `0x2329` | `0x034E` | 846 |
+| `0x227A` | `0x0390` | 912 |
+
+Une échelle monotone dans une plage compatible avec une conversion **sur 10 bits** (0–1023),
+lue par le BK3632 et transmise sur EUART0.
+
+> *Inféré :* qu'il s'agisse de la **tension de batterie** et que les quatre seuils soient les
+> paliers d'une jauge. Ce qui est établi : la provenance (trame EUART0, octet 7), l'échelle de
+> seuils, l'hystérésis, et le fait que `0x2D.4` n'a qu'un seul écrivain.
+
+#### `fcn.00006ACF` — deux gardes, puis six emplacements
+
+```asm
+mov a, EP2CON            ; SFR 0x9A
+jnb ACC.2, suite         ; si l'endpoint est encore arme -> sortir
+ljmp sortie
+suite:
+a = [0x031b] ; jz chaine ; ljmp sortie   ; ne rien emettre si 0x031B != 0
+```
+
+`0x031B` non nul suffit à couper toute émission USB — c'est un gate plus direct que `0x2D.4`,
+et c'est la même variable qui gouverne les activations d'EUART0 en `0x41F2`/`0x4227`/`0x425D`.
+
+Vient ensuite une **chaîne de priorité décroissante**. Chaque maillon acquitte son drapeau,
+pose `0x26.7`, écrit l'index, le Report ID en tête de tampon et un pointeur générique, puis
+saute au copieur :
+
+| Ordre | Drapeau | `0x0F0C` | Tampon | Report ID | Longueur |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `0x2A.0` | 0 | `0x09BC` | 2 | 3 |
+| 2 | `0x27.3` | 1 | `0x097D` | 1 | 2 |
+| 3 | `0x27.4` | 2 | `0x08BF` | 3 | 4 |
+| 4 | `0x2A.6` | 3 | `0x0980` | 4 | 16 |
+| 5 | `0x29.0` | 4 | `0x09B0` | 7 | 8 |
+| 6 | `0x2B.2` | 5 | `0x0095` | 6 | 8 |
+
+**Six maillons — et la table de longueurs `0x6045` a exactement six entrées valides**
+(`03 02 04 10 08 08`) avant son `0xFF` de fin. Les deux se confirment mutuellement, ce qui
+valide au passage la lecture de la table.
+
+Noter que le Report ID ne suit pas l'index : l'index 0 porte l'ID 2, l'index 1 porte l'ID 1.
+Les maillons 3 et 4 le calculent par `inc a`, les autres l'écrivent en dur.
+
+#### `fcn.000044F6` — deux moitiés symétriques, une sortie commune
+
+```
+0x44F6  jb 0x2A.4 / jb 0x27.0 / jb 0x2A.6  -> moitie A (0x4502)
+                                   sinon   -> moitie B (0x45A2)
+
+moitie A (0x4502-0x45A2)   index [0x0307], enregistrement 0x0C57 + n x 28
+moitie B (0x45A2-0x4652)   trois gardes puis corps parallele
+
+0x4652  convergence
+0x4675    jb 0xB0.7          <-- P4.7 : le module radio doit etre pret
+0x467B    ... -> euart0.send  r5 = 30   (charge de 28 o)
+0x46EB    ... -> euart0.send  r5 = 13   (charge de 11 o)
+```
+
+Les deux moitiés sont structurellement identiques (blocs de 136 et 143 octets) et convergent sur
+un unique bloc d'émission. C'est la seule des cinq entrées de `euart0.send` qui soit atteinte
+depuis la chaîne de rapport.
 
 ### Réception : parser et format des réponses
 
