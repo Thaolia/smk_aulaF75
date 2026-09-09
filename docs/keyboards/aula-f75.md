@@ -1254,22 +1254,67 @@ off 116  04 09 | 04 04 x5
 off 126  5a a5
 ```
 
-#### Une tension que je ne résous pas
+#### Résolution : deux familles d'effets, et un sélecteur
 
-`XRAM 0x009D` est **0x20-basé** — il est écrit avec `#0x20` (`0x4494`), `#0x26` (`vec.reset`
-@ `0x9188`, la valeur par défaut) et `#0x2D` (`0xA48F`). L'index `[0x009D] × 2` place donc les
-enregistrements des effets `0x20` et au-delà aux offsets 120 et suivants — alors que la structure
-par paires est visible dès l'offset 58, c'est-à-dire pour des index bien inférieurs à `0x20`.
+La tension venait d'une hypothèse fausse de ma part — que `XRAM 0x009D` soit uniformément
+`0x20`-basé. Il ne l'est pas. `fn.fx_init` (`0xA2EC`) et `fcn.0000A069` (`0xA0D9`) portent le
+même sélecteur, à l'identique :
 
-Deux lectures restent possibles et je n'ai pas de quoi trancher :
+```asm
+mov dptr,#0x0316 ; movx a,@dptr    ; offset 9
+setb c ; subb a,#0x00              ; carry ssi [0x0316] == 0
+jc  prendre_0317
+mov dptr,#0x0318                   ; [0x0316] != 0  ->  offset 11
+sjmp ecrire
+prendre_0317:
+mov dptr,#0x0317                   ; [0x0316] == 0  ->  offset 10
+ecrire:
+movx a,@dptr ; movx [0x009d], a
+```
 
-- le tableau est indexé **par une autre clé** sur les sites que je n'ai pas inspectés
-  (`0x118F`, `0x79C9`, `0x7A5F` sont dans `fcn.00007928`, un tout autre contexte) ;
-- ou seuls les derniers enregistrements servent au chemin RGB, le reste appartenant à autre chose.
+Il y a donc **deux familles d'effets**, et l'offset 9 dit laquelle est active :
 
-De même, `5A A5` en queue (`0101 1010` / `1010 0101`, complémentaires) a tout d'un **marqueur de
-validité** — mais tombe aussi pile sur l'enregistrement d'index 35 du tableau à pas 2. Je le
-signale sans trancher.
+| Offset | Rôle | Plage | Dump |
+| --- | --- | --- | --- |
+| 9 | sélecteur de famille | 0 / ≠0 | `0x00` |
+| 10 | effet **famille A** | 0–14 (`cjne a, #0x0E`) | `0x04` |
+| 11 | effet **famille B** | `0x20`+ | `0x20` |
+
+Sur le clavier dumpé, le sélecteur vaut 0 → **`XRAM 0x009D = 4`, famille A**. C'est ce qui
+manquait : les valeurs `0x20` / `0x26` / `0x2D` que j'avais relevées appartiennent toutes à la
+famille B, et m'avaient fait généraliser à tort.
+
+#### Le tableau se recale exactement
+
+Avec l'index `[0x009D] × 2` sur la base `0x0345` :
+
+| Famille | Index | Offsets couverts | |
+| --- | --- | --- | --- |
+| A | 0 – 14 | **56 – 85** | entièrement **dans** le bloc |
+| B | `0x20` – `0x2F` | 120 – 151 | **déborde** les 128 octets |
+
+La famille A couvre précisément la zone structurée du dump (offsets 58–85), et c'est elle qui est
+persistée. Les enregistrements de la famille B sortent du bloc et ne vivent qu'en XRAM.
+
+Décodage de l'enregistrement de l'effet courant (index 4 → offset **64**, octets `09 37`) :
+
+| Champ | Valeur | Destination |
+| --- | --- | --- |
+| `b0 & 0x1F` | 9 | `XRAM 0x0D19` (`0x1197`) |
+| `b0` bit 7 | 0 | drapeau `0x24.3` (`0x1170`) |
+| `b1 & 0x0F` | 7 | `XRAM 0x011C` (`0x117E`) |
+| `b1 & 0x8F` | `0x07` | `0x8F6A` |
+
+Deux paramètres par effet, sur 5 et 4 bits, plus deux bits de drapeau — la forme attendue d'un
+couple *vitesse / luminosité* avec des indicateurs, même si les noms restent à confirmer.
+
+#### Et `5A A5`
+
+L'argument « ce pourrait être l'enregistrement d'index 35 » s'affaiblit nettement : les
+enregistrements de la famille B débordent le bloc de toute façon (l'effet `0x26`, valeur par
+défaut au reset, tombe à l'offset 132), donc les deux derniers octets du bloc ne portent aucune
+donnée d'effet utile. Avec en plus un motif complémentaire (`0101 1010` / `1010 0101`) en toute
+fin de structure, la lecture **marqueur de validité** est la mieux étayée. Elle reste non prouvée.
 
 ### Réception : parser et format des réponses
 
