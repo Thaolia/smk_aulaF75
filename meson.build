@@ -24,8 +24,9 @@ parts = [
     ['genesis-thor-300', 'sh68f881', ['default'], { 'vendor_id': '0x258a', 'product_id': '0x001f', 'led_rows': '6', 'led_cols': '19', 'led_cx2': '17', 'led_cy2': '5' }],
     # AULA F75 : VID/PID lus dans la flash d'usine (descripteur device @ 0x5FCE).
     # Grille LED 6x15 etablie via OpenRGB (num_leds=90, index = col*6+row).
-    # Pas de 'wireless' : le BK3632 est relie par EUART0, pas par le SPI bit-bange de l'Air60.
-    ['aula-f75', 'sh68f90', ['default'], { 'vendor_id': '0x258a', 'product_id': '0x010c', 'led_rows': '6', 'led_cols': '15', 'led_cx2': '14', 'led_cy2': '5' }],
+    # wireless 'euart0' : le BK3632 est relie par EUART0 (src/keyboards/aula-f75/aula_rf.c),
+    # pas par le SPI bit-bange de l'Air60.
+    ['aula-f75', 'sh68f90', ['default'], { 'vendor_id': '0x258a', 'product_id': '0x010c', 'wireless': 'euart0', 'led_rows': '6', 'led_cols': '15', 'led_cx2': '14', 'led_cy2': '5' }],
 ]
 
 # SMK
@@ -146,7 +147,8 @@ possible_src_keyboard = [
     # 'user_keyboard.c',
     'kb.c',
     # Sources optionnelles propres a un clavier ; ignorees si le fichier n'existe pas.
-    'aula_rgb.c'
+    'aula_rgb.c',
+    'aula_rf.c'
 ]
 
 possible_src_layout = [
@@ -306,6 +308,14 @@ foreach part : parts
             src_main += src_platform_bk3632
             inc_dirs += inc_platform_bk3632
             cc_args += '-DRF_ENABLED=1'
+        elif wireless == 'euart0'
+            # BK3632 over the SH68F90's EUART0. The driver lives with the keyboard
+            # (protocol is board-specific), so nothing is added to src_main here.
+            # EUART0 has one owner: the debug UART sink would fight it over SCON/SBUF.
+            if get_option('debug_sink') != 'console'
+                error('@0@: wireless "euart0" owns EUART0; debug_sink must stay "console"'.format(keyboard))
+            endif
+            cc_args += '-DRF_EUART0=1'
         elif wireless != ''
             error('unsupported platform: @0@'.format(platform))
         endif

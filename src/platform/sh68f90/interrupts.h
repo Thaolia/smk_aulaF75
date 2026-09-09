@@ -5,12 +5,18 @@
 void systick_interrupt_handler(void) __interrupt(_INT_TIMER2);
 void usb_interrupt_handler(void) __interrupt(_INT_USB);
 void int4_interrupt_handler(void) __interrupt(_INT_INT4);
+#if defined(DEBUG_SINK_UART) && defined(RF_EUART0)
+#    error "DEBUG_SINK_UART and RF_EUART0 both drive EUART0; pick one"
+#endif
 #ifdef DEBUG_SINK_UART
 void uart_interrupt_handler(void) __interrupt(_INT_EUART0);
 #endif
+#ifdef RF_EUART0
+void rf_euart0_interrupt_handler(void) __interrupt(_INT_EUART0);
+#endif
 void pwm_interrupt_handler(void) __interrupt(_INT_PWM0);
 
-#ifdef DEBUG_SINK_UART
+#if defined(DEBUG_SINK_UART) || defined(RF_EUART0)
 #    define UNUSED_INTERRUPTS_EUART0(X)
 #else
 #    define UNUSED_INTERRUPTS_EUART0(X) X(euart0, _INT_EUART0, IEN1, _ES0)
