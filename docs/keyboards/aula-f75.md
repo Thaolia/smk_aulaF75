@@ -1308,6 +1308,103 @@ Décodage de l'enregistrement de l'effet courant (index 4 → offset **64**, oct
 Deux paramètres par effet, sur 5 et 4 bits, plus deux bits de drapeau — la forme attendue d'un
 couple *vitesse / luminosité* avec des indicateurs, même si les noms restent à confirmer.
 
+#### `0x0D19` et `0x011C` — vitesse et couleur
+
+Les deux destinations de l'enregistrement par effet sont identifiées.
+
+##### `XRAM 0x0D19` — la vitesse (27 références)
+
+`fcn.0000A0F0` — appelée depuis douze sites de rendu — s'en sert comme index :
+
+```asm
+mov dptr,#0x0d19 ; movx a,@dptr
+mov dptr,#0x2937 ; movc a,@a+dptr    ; gain = table[vitesse]
+movx [0x0ef1], a ; mov r5, a
+... lcall fcn.0000EF66   (r6:r7 = r7 x r5, multiplication 8x8 -> 16)
+... lcall fcn.00000056   avec r5 = 0x50 = 80  (division)
+```
+
+Table `0x2937` :
+
+```
+00 08 10 18 20 28 32 3c 46 50 | ff
+ 0  8 16 24 32 40 50 60 70 80   fin
+```
+
+**Dix entrées, indices 0 à 9** — ce qui recoupe exactement la borne `subb a, #0x09` relevée en
+`0x7A18` et `0x7A86`. Le gain va de 0 à 80, et la division par 80 en fait un facteur de 0 à 1
+appliqué à trois grandeurs (`0x0000`, `0x011D`, `0x0E25` → `0x0E46`, `0x0E42`, `0x0E3F`).
+
+Le maximum est **par effet**, lu dans une table CODE :
+
+```asm
+0x8C30  mov dptr,#0x009d ; movx a,@dptr
+0x8C34  mov dptr,#0xa8d5 ; movc a,@a+dptr   ; borne = CODE[0xA8D5 + effet]
+0x8C39  ... compare et sature 0x0D19
+```
+
+Valeur par défaut **4** (`0x1D10`, `0x1D31`). Valeur dans le dump : **9**, soit le maximum.
+
+##### `XRAM 0x011C` — le mode de couleur (30 références)
+
+Six fonctions de rendu — `fcn.00004EA9`, `0x5114`, `0x60C9`, `0x6C9B`, `0x7108`, `0x746A`, plus
+`0xA791` — commencent toutes par le même test :
+
+```asm
+mov dptr,#0x011c ; movx a,@dptr ; mov r7,a
+xrl a,#0x07 ; jz  saute            ; 0x011C == 7 -> on court-circuite
+mov dptr,#0x0896 ; movx a,@dptr
+mov 0xf0,#0x15 ; mul ab            ; x 21
+add a,#0x00 ; mov DPL,a
+mov a,0xf0 ; addc a,#0xc8 ; mov DPH,a   ; 0xC800 + n x 21
+mov 0xf0,#0x03 ; mov a,r7 ; lcall fcn.00004E39   ; x 3
+```
+
+**21 octets = sept triplets RGB**, et l'index dans l'enregistrement est `0x011C × 3`. La table
+est en **flash page 100 (`0xC800`)**, dans la zone IAP. Le dump donne, à l'identique pour chaque
+profil :
+
+| Index | Couleur |
+| --- | --- |
+| 0 | `#FF0000` rouge |
+| 1 | `#00FF00` vert |
+| 2 | `#0000FF` bleu |
+| 3 | `#FFFF00` jaune |
+| 4 | `#FF00FF` magenta |
+| 5 | `#00FFFF` cyan |
+| 6 | `#FFFFFF` blanc |
+
+Donc **`0x011C` de 0 à 6 sélectionne une couleur fixe de la palette, et 7 est le cas
+« pas de couleur fixe »** — le mode arc-en-ciel, celui qui saute la lecture de palette. Défaut
+**7** (`0x1D2B`) ; valeur dans le dump : **7**.
+
+Son maximum est lui aussi par effet, dans `CODE[0xA8A3 + effet]` (`0x939F`, `0x93B4`).
+
+##### Trois tables de bornes par effet
+
+`0xA8A3`, `0xA8BC`, `0xA8D5` — espacées de `0x19` = 25 :
+
+| Base | Borne de | Valeur famille A | Valeur famille B |
+| --- | --- | --- | --- |
+| `0xA8A3` | `0x011C` (couleur) | 7 | 4 |
+| `0xA8BC` | *(troisième paramètre)* | 4 | — |
+| `0xA8D5` | `0x0D19` (vitesse) | 9 | 9 |
+
+Les deux affectations extrêmes sont vérifiées par désassemblage direct (`0x8C34` pour `0xA8D5`,
+`0x939F` pour `0xA8A3`). Celle du milieu ne l'est pas.
+
+##### L'enregistrement se relit entièrement
+
+Pour l'effet courant du clavier dumpé (index 4, offset 64, octets `09 37`) :
+
+| Bits | Valeur | Sens |
+| --- | --- | --- |
+| `b0[4:0]` | 9 | **vitesse**, au maximum |
+| `b0[7]` | 0 | drapeau `0x24.3` |
+| `b1[3:0]` | 7 | **couleur** = arc-en-ciel |
+| `b1[6:4]` | 3 | non lu par les masques identifiés — candidat pour le paramètre borné à 4 |
+| `b1[7]` | 0 | drapeau (masque `0x8F`) |
+
 #### Et `5A A5`
 
 L'argument « ce pourrait être l'enregistrement d'index 35 » s'affaiblit nettement : les
