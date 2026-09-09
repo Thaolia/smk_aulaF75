@@ -245,13 +245,107 @@ Table de 10 entrées de 3 octets en `0xA68D` :
 | **5, 6, 7** | **`ljmp 0xA468`** |
 | 8 | `0xA6D2` |
 
-`XRAM 0x0D17` est donc un **index de mode, 0 à 9**, et les modes 5, 6 et 7 partagent le même
-handler — d'où le fait que `0xA468` les re-teste un par un en interne. Chaque autre branche est
-gardée par `jb 0x2a.5` et `jb 0x23.3` ; la branche 5/6/7 ne l'est pas, parce que `0xA468` gère
-lui-même le verrou `0x2A.5`.
+`XRAM 0x0D17` est donc un index 0 à 9, et les valeurs 5, 6 et 7 partagent le même handler —
+d'où le fait que `0xA468` les re-teste une par une en interne. Chaque autre branche est gardée
+par `jb 0x2a.5` et `jb 0x23.3` ; la branche 5/6/7 ne l'est pas, parce que `0xA468` gère lui-même
+le verrou `0x2A.5`. Voir plus bas ce que `0x0D17` est réellement.
 
-*Ce que `0x0D17` désigne concrètement n'est pas établi.* Le dispatcher, ses bornes et le partage
-5/6/7 le sont.
+### `XRAM 0x0D17` — la classe d'action d'une touche, lue dans une table en flash
+
+`0x0D17` n'est pas une variable que le firmware calcule : c'est un **champ extrait d'une table**.
+
+#### L'idiome d'extraction
+
+Onze sites écrivent `0x0D17`, tous avec le même prologue. Les deux accesseurs le décodent :
+
+```asm
+fcn.00004DEC:                  ; charge 4 octets de CODE @ DPTR
+    clr a  ; movc a,@a+dptr ; mov r4,a
+    mov a,#1 ; movc a,@a+dptr ; mov r5,a
+    mov a,#2 ; movc a,@a+dptr ; mov r6,a
+    mov a,#3 ; movc a,@a+dptr ; mov r7,a
+
+fcn.00004DC5:                  ; r4:r5:r6:r7 >>= r0   (decalage de r0 BITS, sur 32 bits)
+    mov a,r0 ; jz fin
+boucle: rrc sur r4, r5, r6, r7 ; djnz r0, boucle
+```
+
+`fcn.00004DC5` prend donc un nombre de **bits**, pas d'octets : `r0 = 8` et `r0 = 16` extraient
+respectivement l'octet 2 et l'octet 1 d'un enregistrement de 4 octets. Dans `fcn.00007ECA` :
+
+```asm
+mov B,#4 ; mov a,r3 ; mul ab
+mov DPL,a ; mov a,B ; addc a,#0xce ; mov DPH,a   ; DPTR = 0xCE00 + index x 4
+lcall fcn.00004DEC
+mov r0,#0x08 ; lcall fcn.00004DC5 ; movx [0x0d16], r7
+...
+mov r0,#0x10 ; lcall fcn.00004DC5 ; movx [0x0d17], r7
+```
+
+| Variable | Décalage | Octet de l'enregistrement |
+| --- | --- | --- |
+| `0x0D15` | 0 | b3 |
+| `0x0D16` | 8 | b2 |
+| `0x0D17` | **16** | **b1** |
+| — | 24 | b0 |
+
+L'index vient de `XRAM 0x02E0`, écrit par `fcn.00003108` (`0x3190`) depuis le compteur
+d'événements `IDATA 0x09`.
+
+#### La table `0xCE00` — vérifiée sur le dump
+
+Extrait des 40 premières entrées de `assets/f75_firmware.bin` :
+
+| idx | offset | b0 b1 b2 b3 | `0x0D17` | dispatch |
+| --- | --- | --- | --- | --- |
+| 0 | `0xCE00` | `00 00 00 29` | 0 | `0x83D2` |
+| 1 | `0xCE04` | `00 00 00 35` | 0 | `0x83D2` |
+| 2 | `0xCE08` | `00 00 00 2b` | 0 | `0x83D2` |
+| 3 | `0xCE0C` | `00 00 00 39` | 0 | `0x83D2` |
+| 4 | `0xCE10` | `00 02 00 00` | 2 | `0x9363` |
+| 5 | `0xCE14` | `00 01 00 00` | 1 | — |
+| 11 | `0xCE2C` | `00 04 00 00` | 4 | `0x8EC4` |
+| 12 | `0xCE30` | `02 00 00 70` | 0 | `0x83D2` |
+| 17 | `0xCE44` | `00 08 00 00` | 8 | `lcall 0x91D3` |
+| 36 | `0xCE90` | `08 03 02 00` | 3 | `0x8C0F` |
+
+**Sur toutes les entrées non nulles, `b1` vaut 0, 1, 2, 3, 4 ou 8 — jamais ≥ 10.** La borne
+`cjne a,#0x0A ; jnc sortie` du dispatcher n'est jamais violée par la table d'usine. C'est une
+validation empirique du décodage : si l'octet extrait avait été le mauvais, la distribution
+n'aurait aucune raison de tomber dans les bornes.
+
+Et quand `b1 == 0`, **`b3` contient un code d'usage HID clavier** : `0x29` Échap, `0x35`
+backquote, `0x2B` Tab, `0x39` Verr.Maj, `0x04`–`0x1D` les lettres, `0x1E`–`0x23` les chiffres.
+Deux entrées portent `b0 = 0x02` — le bit **LeftShift** du champ modificateurs HID.
+
+#### Lecture
+
+L'enregistrement est donc `[modificateurs, classe d'action, paramètre, usage HID]` :
+
+| Octet | Variable | Rôle |
+| --- | --- | --- |
+| b0 | — | modificateurs HID (`0x02` = LeftShift observé) |
+| b1 | `0x0D17` | **classe d'action**, index du dispatcher `0xA68D` |
+| b2 | `0x0D16` | paramètre (routé vers `0x031F` quand la classe vaut 9) |
+| b3 | `0x0D15` | code d'usage HID |
+
+Le dispatcher `0xA674` teste d'ailleurs `0x0D15` en premier (`jnz`), et `0x83D2` — la classe 0 —
+refait le même test avant de partir sur le chemin d'émission en `0x845F`. Classe 0 = « émettre
+cet usage HID » ; les classes 1 à 8 sont des actions spéciales, dont 5/6/7 l'effet temporaire
+décrit plus haut.
+
+> *Inféré :* que cette table soit la **table de remap** du clavier. Ce qui est établi, c'est sa
+> structure, son adressage, l'extraction, et le fait que `b3` contienne des usages HID.
+
+#### Conséquence : la table est réinscriptible
+
+`0xCE00` tombe dans la **page 103**, en plein dans la zone IAP `0xC600`–`0xEBFF` établie plus
+haut — et la page 103 est justement l'une des sept pages non vierges du dump. Le firmware peut
+donc réécrire cette table par sa propre routine `fcn.0000AAC1`, sans passer par l'ISP.
+
+C'est le point d'entrée le plus prometteur pour un remap : il ne demande ni de reflasher le
+firmware, ni de porter quoi que ce soit — seulement d'atteindre la bonne commande du protocole
+de configuration. **Non tenté : rien n'a été flashé.**
 
 #### `fcn @ 0xA468` — deux transitions symétriques autour de l'effet `0x2D`
 
