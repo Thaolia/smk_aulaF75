@@ -1847,6 +1847,66 @@ if (++counter > 99) {
 Les handlers se **chaînent** en réécrivant `0x0D9E` (`0x3CCE`, `0x3CD4`) et le remettent à zéro en
 fin de service (`0x393E`) : une requête déclenche une rafale de réponses, une par tic.
 
+#### Les huit octets que `0x41` ne lit pas — et `5A A5` enfin tranché
+
+Le handler 2 redispatche lui aussi sur `0x038D`, mais avec **quatre** bases, espacées de
+**1024** octets :
+
+| `0x038D` | Base | Page |
+| --- | --- | --- |
+| 0 | `0xCC00` | 102 |
+| 1 | `0xD000` | 104 |
+| 2 | `0xD400` | 106 |
+| 3 | `0xD800` | 108 |
+
+Et il en lit **504 = 512 − 8** octets. Les huit octets sautés sont la queue de la page. Les voici,
+pour la base `0xD800` :
+
+```
+offset 504..511 :  00 00 00 00 00 00 5a a5
+```
+
+**Les seuls octets non nuls de toute la page sont ce `5A A5`** — et ils tombent précisément dans la
+zone que le firmware s'abstient de relire.
+
+##### Le marqueur, balayé sur toute la zone IAP
+
+| Page | Marqueur `5A A5` | Octets non nuls |
+| --- | --- | --- |
+| 99 | offset **126** (fin du bloc de 128 o) | 87 |
+| 100 | offset 506 | 282 |
+| 101 | — | 18 |
+| **102 – 109** | offset **510** (deux derniers octets) | 86, 100, 75, 57, 2, 2, 2, 2 |
+| 110 – 117 | — | **0** |
+
+Trois constats indépendants convergent :
+
+1. le motif est en **fin de page** (offset 510) sur huit pages consécutives ;
+2. l'opcode `0x41` s'arrête à **512 − 8**, donc **juste avant** lui ;
+3. les pages qui le portent ont du contenu ; celles qui ne l'ont pas sont **entièrement vierges**.
+
+> **Tranché.** `5A A5` est un **tampon de validité de page**, et le chemin de relecture le sait :
+> il renvoie les données et laisse la queue. Je l'avais signalé deux fois comme « lecture la mieux
+> étayée, non prouvée » — le `504 = 512 − 8` est la preuve structurelle qui manquait, parce qu'elle
+> vient du code et non du motif binaire.
+
+Les deux octets sont complémentaires (`0101 1010` / `1010 0101`), ce qui reste la forme classique
+d'un tampon : un effacement flash laisse `FF FF` ou `00 00`, jamais cette paire.
+
+##### Ce que cela change sur les profils
+
+Les pages **102 à 109 sont marquées valides**, les pages **110 à 117 ne le sont pas** et sont
+vierges. Or l'opcode `0x43` lit exactement `0xDC00`–`0xEA00`, c'est-à-dire les **pages 110 à 117** —
+les non marquées — tandis que `0x41` lit quatre des huit marquées.
+
+La grille `0xD800 + n × 512` établie depuis l'offset 0 du bloc de réglages reste exacte comme
+**adressage**. Mais la frontière réelle des données est ailleurs : elle passe entre la page 109 et
+la page 110, pas à `0xD800`.
+
+> *Reste ouvert :* pourquoi `0x41` ne lit qu'une page sur deux parmi les huit marquées (102, 104,
+> 106, 108 — jamais 103, 105, 107, 109), et ce que deviennent les 520 octets non relus de chacune
+> de ses régions de 1024. Le pas de 1024 avec une lecture de 504 ne se referme pas.
+
 #### L'opcode `0x43` — un second niveau de dispatch, et ce que valent les 518 octets
 
 Le handler 4 n'émet pas directement : il **redispatche** sur `XRAM 0x038D`, le sous-index que
