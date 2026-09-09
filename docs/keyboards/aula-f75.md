@@ -276,6 +276,40 @@ l'USB est utilisé — non tranché ici).
 court et en déduit le débit. PulseView (sigrok) et Saleae le font automatiquement. Le calcul sert à
 vérifier que la mesure est plausible.
 
+##### Avec quoi capturer — l'analyseur logique n'est pas obligatoire
+
+| Outil | Coût | Ce qu'il donne | Limites |
+| --- | --- | --- | --- |
+| **Adaptateur USB-TTL FTDI** | ~3 € | le flux UART décodé, directement | une voie par adaptateur ; **3,3 V obligatoire** |
+| Analyseur logique | ~10 € | les deux voies + le timing exact + `P0.2` | — |
+| Arduino / Pi Pico | ~5 € | idem FTDI, avec horodatage et débit libre | à programmer |
+| **USBPcap + Wireshark** | **0 €** | le protocole **hôte ↔ clavier** (Report ID 6) | **pas** le lien 8051 ↔ BK3632 |
+
+**L'adaptateur USB-TTL est le meilleur rapport effort/résultat**, et beaucoup de gens en ont déjà un.
+
+Le débit non standard n'est pas un obstacle avec une puce **FTDI** : son générateur fait
+`baud = 3 000 000 / diviseur` avec un diviseur fractionnaire par 1/8. Pour 260 870 le diviseur vaut
+`11,5` — exactement réalisable. Pour 130 435 il vaut `23` — exact aussi. Sous Linux, `stty -F
+/dev/ttyUSB0 260870` suffit. Un CH340 est moins fiable sur les débits exotiques.
+
+⚠️ **Câblage, en RÉCEPTION SEULE :**
+
+- `RX` de l'adaptateur sur `P5.5` (ou `P5.6`), **masse commune** avec le clavier.
+- **Ne jamais connecter le `TX` de l'adaptateur.** Y injecter des données perturberait le lien, et
+  un adaptateur 5 V détruirait une entrée 3,3 V.
+- Un seul adaptateur ne capture qu'une direction. Deux adaptateurs, ou deux passes successives.
+
+##### Et l'option sans aucun matériel
+
+**USBPcap + Wireshark** (Windows) ou `usbmon` + `tshark` (Linux) capturent le trafic USB entre le
+PC et le clavier — **gratuitement, sans rien souder**. Mais c'est une **couche différente** : on y
+voit le canal HID Report ID 6 (`0x04` write config, `0x84` read, `0x0a` table de couleurs…), pas
+les trames EUART0 vers le BK3632.
+
+C'est donc l'outil pour finir de documenter le **protocole de configuration** — celui de l'article
+de xevrion, celui qui donne le RGB et le remap. Ce n'est pas celui du sans-fil. Les deux chantiers
+sont distincts, et celui-là ne coûte rien.
+
 ##### Quoi capturer
 
 Ce qu'on sait déjà chercher (voir le tableau du transport plus haut) : trames commençant par
