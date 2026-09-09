@@ -268,9 +268,13 @@ mov SFINE, #0x0C   ; BFINE = 12
 
 Formule du datasheet : `Baud = Fsys / (16 × (32768 − SBRT) + BFINE)`
 
-→ `Fsys / (16 × 5 + 12)` = **`Fsys / 92`**, soit **≈ 260 870 baud** si `Fsys` = 24 MHz,
-ou ≈ 130 435 si le cœur tourne à 12 MHz (le datasheet mentionne le RC 24 MHz divisé par 2 quand
-l'USB est utilisé — non tranché ici).
+→ `Fsys / (16 × 5 + 12)` = **`Fsys / 92`** = **260 870 baud**.
+
+**`Fsys` = 24 MHz, confirmé par recoupement.** Le driver UART de SMK
+(`platform/sh68f90/uart.c`) implémente la même formule ; avec `FREQ_SYS = 24000000` et
+`UART_BPS = 260870` il calcule `SBRT_INT = 5` → `SBRT = 32763 = 0x7FFB` → `SBRTH = 0xFF`,
+`SBRTL = 0xFB`, et `SFINE = 24000000/260870 − 80 = 12 = 0x0C`. **Les trois registres du firmware
+d'usine, à l'identique.** Une valeur de `Fsys` différente ne les reproduirait pas.
 
 **En pratique, ne pas se fier à ce calcul :** un analyseur logique mesure la largeur du bit le plus
 court et en déduit le débit. PulseView (sigrok) et Saleae le font automatiquement. Le calcul sert à
@@ -337,6 +341,71 @@ sens — donc on sait quoi chercher et comment séparer les deux directions.
 **Coût : un analyseur logique et un point de test.** Aucun flashage, aucun dessoudage, aucun
 nouveau binaire à désassembler. C'est la voie qui donne le protocole *tel qu'il est réellement
 parlé*.
+
+#### A-bis. Sonder le BK3632 depuis un firmware maison — sans matériel externe
+
+Idée : au lieu d'écouter le fil de l'extérieur, faire tourner **notre propre firmware** sur le 8051
+et lui faire parler au BK3632, en journalisant tout sur la console USB de SMK.
+
+**⚠️ L'écoute passive ne marcherait PAS.** Si notre firmware tourne, celui d'usine ne tourne pas :
+plus personne n'envoie de commandes, et le BK3632 est un esclave qui attend. On n'entendrait rien.
+
+**Ce qui marche, c'est le sondage actif.** On connaît le format des trames et les codes de
+commande, relevés dans le firmware d'usine. Notre firmware peut donc **rejouer les séquences
+exactes** que l'usine construit et journaliser les réponses. Le BK3632 réel sert d'oracle.
+
+##### Tout l'outillage existe déjà dans SMK
+
+| Brique | Où |
+| --- | --- |
+| Driver UART (init, `putc`, `getc`) | `src/platform/sh68f90/uart.c` |
+| Console de debug sur USB HID | `src/smk/console.c`, `dprintf()` |
+| Lecteur côté hôte | `tools/smk-console` |
+| Retour en ISP par USB | `src/smk/usb.c:442` → `isp_jump()` |
+
+Réglages à poser : `UART_BPS = 260870`, `UART_RX_EN = 1`, et la console en sortie USB (pas UART,
+puisque l'UART sert à parler au BK3632).
+
+##### Séquences à rejouer
+
+Les cinq sites d'émission repérés donnent les trames à reproduire, avec leur longueur :
+
+| Site | Longueur | Commande | Déclencheur connu |
+| --- | --- | --- | --- |
+| `0xA376` | 32 | `0x09` | appelé depuis `main()` (`0x9148`) — init du lien |
+| `0x46C2` | 30 | ? | — |
+| `0xB0B8` | 23 | `0x08` | — |
+| `0x4730` | 13 | ? | — |
+| `0xED53` | 6 | `0x05` | — |
+
+Le contenu exact des charges utiles se lit dans le désassemblage de chaque site.
+
+##### Profil de risque — **il faut flasher**
+
+C'est la seule voie de cette section qui l'exige. Ce qui l'atténue :
+
+- **Firmware minimal** : USB + UART seulement, ni matrice, ni RGB, ni veille. Moins de code, moins
+  de chances de se bloquer avant que l'USB monte.
+- **Deux retours ISP vérifiés sur cet appareil** : le bootloader teste `0xEFFB` au reset
+  (`0xF024`), et `isp_jump()` fonctionne via l'entrée magique `0xFF00`.
+- **Image d'usine disponible** : `assets/f75_full.bin`, MD5 relevé, restaurable.
+
+Ce qui reste : **`sinowisp write` n'a jamais été testé sur ce modèle** (case décochée dans
+l'issue #96), et pas de programmateur externe de secours.
+
+##### Comparaison
+
+| | Sonde externe (USB-TTL / analyseur) | Firmware maison |
+| --- | --- | --- |
+| Flashage | **aucun** | **requis** |
+| Matériel | adaptateur ~3 € + 2 points de soudure | aucun |
+| Observe | le dialogue **réel** de l'usine | seulement ce qu'on provoque |
+| Risque | nul | brique possible |
+
+**Les deux sont complémentaires.** La sonde externe montre ce que l'usine dit *vraiment*, dans
+l'ordre et le contexte. Le firmware maison permet d'*interroger* le BK3632 librement, y compris sur
+des commandes que l'usine n'émet jamais. Commencer par la sonde externe reste plus sage : elle
+donne la vérité de terrain sans rien risquer.
 
 #### B. Dumper le firmware du BK3632 — beaucoup plus lourd
 
