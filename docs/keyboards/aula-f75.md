@@ -229,11 +229,42 @@ Ce que ça implique concrètement pour le F75 :
 
 1. Accéder aux pads `P0.4`-`P0.7`, `RST`, `VCC`, `GND` d'un **QFN32** sur le PCB — loupe, pointes
    fines, voire dessoudage.
-2. Le dongle BEKEN, ou adapter [`BK7231_SPI_Flasher`](https://github.com/openshwprojects/BK7231_SPI_Flasher)
-   (Raspberry Pi, GPIO SPI) — **mais sa séquence d'init est celle du BK7231T**, et les fils
-   elektroda comparant BK3432 / BK3431 / BK7231 existent précisément parce qu'**elles diffèrent**.
-   Celle du BK3632 n'est pas établie.
+2. Un programmateur. Le dongle *BEKEN SPI flasher* (vendeur), ou la voie communautaire décrite
+   plus bas — **mais la séquence d'init du BK3632 n'est pas établie**.
 3. Puis désassembler un binaire **ARM9** de 160 Ko : une cible entièrement neuve.
+
+##### La méthode Beken « SPI flash mode », et sa limite
+
+Le mode SPI des Beken est documenté en détail pour le **BK7231T**
+([elektroda, p.kaczmarek2](https://www.elektroda.com/rtvforum/topic3931424.html)). Principe : la
+puce **expose sa propre flash interne comme une mémoire SPI esclave**, qui s'identifie comme un
+EN25QH16B.
+
+```
+SPI mode 3, 30 kHz          (les fréquences plus hautes échouent)
+CEN bas -> attendre 1 s -> CEN haut
+envoyer 0xD2 x 250          -> réponse : un 0xD2 puis 249 x 0x00
+identifier : 9F 00 00 00    -> 00 15 70 1C
+```
+
+Ensuite, commandes de flash standard : `0x03` lecture page, `0x02` programmation page,
+`0x20` effacement secteur, pages de **256 octets**, adresses sur 3 octets. L'écriture exige
+l'effacement préalable.
+
+Broches sur BK7231 : `P20`-`P23` = SCK, CSN, SI, SO, plus **CEN** (reset).
+
+Outillage recommandé aujourd'hui : [`BK7231GUIFlashTool`](https://github.com/openshwprojects/BK7231GUIFlashTool)
+avec un **programmateur CH341** (~5 €), en mode « Beken SPI » et non générique, avec **D2 du CH341
+relié à CEN** pour piloter le reset. C'est nettement plus accessible que le Raspberry/Banana Pi de
+l'article d'origine, ou que le dongle vendeur.
+
+**⚠️ La transposition à la famille BK34xx n'est PAS établie.** La question a été posée
+textuellement sur ce fil le 21 juillet 2025 — « I have a bk3432 chip […] is the initialization
+sequence the same? » — et la seule réponse, en octobre 2025, a été « Just try ». Personne n'a
+publié de confirmation.
+
+Deux indices qu'elle **diffère** : les broches SPI sont `P20`-`P23` sur BK7231 mais `P0.4`-`P0.7`
+sur BK3432, et VPP passe par RST. Le BK3632 est encore un autre membre de la famille.
 
 Et au bout, on obtiendrait l'implémentation du protocole, pas les échanges réels — alors que la
 voie A donne directement ces derniers.
