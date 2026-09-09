@@ -26,40 +26,49 @@ ARM Cortex-M et relève de QMK.
 | Disposition | 75 % ANSI | dérivée de `aula_f75_layout` (OpenRGB), recoupée par le compte de trous |
 | Transport sans fil | EUART0 | ISR vecteur 13 = `_INT_EUART0`, `SCON` 0xD8 / `SBUF` 0xAA, half-duplex via `P0CR` + P0.2 |
 
-## Ce qui n'est PAS établi — feuille de relevé
+## Brochage — ÉTABLI
 
-Rien de ce qui suit n'est devinable depuis le firmware d'usine sans travail supplémentaire.
-**Ne pas recopier les valeurs du NuPhy Air60** : même MCU et même marquage BYK916, mais PCB
-différent.
+Recoupé par quatre sources indépendantes. **Le firmware compile** :
+15 208 o de ROM sur 60 416 (25,1 %), 835 o de XRAM sur 4 096.
 
-| Symbole | Quantité | Comment l'établir | État |
-| --- | --- | --- | --- |
-| `KB_R0..R5` | 6 | désassembler le scan de matrice, ou sonder les pads | ❌ |
-| `KB_C0..C14` | 15 (ou 16) | idem | ❌ |
-| Masques de port colonnes | 1 par port | déduits des broches ci-dessus | ❌ |
-| `LED_PWM_C0..C14` | 15 | canaux PWM utilisés par le rétroéclairage | ❌ |
-| `RGB_R*R/G/B` | 18 | broches R/G/B par ligne | ❌ |
-| Switch mode connexion | 0 ou 1 | existence à confirmer d'abord | ❌ |
-| Switch mode OS | 0 ou 1 | idem | ❌ |
-| Broches EUART0 ↔ BK3632 | 2 + direction | TX/RX + la broche de direction (P0.2 ?) | ❌ |
+### Sources
 
-### Question ouverte : 15 ou 16 colonnes ?
+1. **Init GPIO consolidée du firmware d'usine**, `fcn @ 0xA7EC` :
+   `P0CR=0x9C  P1CR=0x3F  P2CR=0x3F  P3CR=0x3F  P4CR=0x4D  P5CR=0x87  P6CR=0xFF  P7CR=0x60`
+   (bit à 1 = sortie, cf. `GPIO_OUTPUT` dans `platform/sh68f90/gpio.h`)
+2. **Table de saut de sélection de colonne** `@ 0x72F4` : 20 emplacements, 15 peuplés, les 5
+   derniers pointant tous sur le handler nul. Chaque handler relâche la colonne précédente
+   (`setb`) puis sélectionne la suivante (`clr`) — l'emplacement 0 relâche `P4.3`, ce qui ferme
+   la boucle et fixe `P4.3` comme dernière colonne.
+3. **Routine de lecture des lignes** `@ 0x73A6` :
+   `mov a,P5 ; add a,ACC ; anl a,#0x30 ; mov r7,a ; mov a,P7 ; anl a,#0x0F ; orl a,r7 ; orl a,#0xC0`
+4. **Portage indépendant** [`tiagoluizo/smk@aula-f75-port`](https://github.com/tiagoluizo/smk/tree/aula-f75-port),
+   qui aboutit au même brochage par une analyse séparée.
 
-La grille LED donne **15** colonnes de façon certaine. Mais une 16ᵉ colonne de matrice **sans LED**
-resterait invisible pour OpenRGB. Les bornes de boucle cherchées dans le firmware d'usine
-(`fcn.00003108` et `fcn.000005EA`, atteintes depuis `_INT_TIMER2`) n'ont rien donné de concluant :
-seules des constantes `0x15` (21) et `0x17` (23) ressortent, et `0x17` est la taille du buffer RX
-de l'UART, sans rapport.
+### Résultat
 
-À trancher avant d'écrire `MATRIX_COLS`.
+| | Broches |
+| --- | --- |
+| **Lignes** (entrées, actives basses) | `P7.0` `P7.1` `P7.2` `P7.3` `P5.3` `P5.4` |
+| **Colonnes** (sorties, actives basses, dans l'ordre de scan) | `P6.0`…`P6.7`, `P5.0` `P5.1` `P5.2` `P5.7`, `P4.0` `P4.2` `P4.3` |
+| **Rétroéclairage** | 18 sorties PWM = 6 lignes LED × R/G/B : `PWM00`-`PWM05` (P3), `PWM10`-`PWM15` (P2), `PWM20`-`PWM25` (P1) |
 
-### Pistes pour le relevé
+L'octet de lignes place la ligne N sur le bit N (`P7 & 0x0F` pour les lignes 0-3, `P5` décalé d'un
+cran et masqué `0x30` pour les lignes 4-5), bits inutilisés forcés à 1 — exactement la convention
+attendue par `src/smk/matrix.c`, qui inverse ensuite l'échantillon.
 
-1. **Désassemblage** — repartir de `_INT_TIMER2` (vecteur 0, `0xA4D7`) vers `fcn.00003108` et
-   `fcn.000005EA`, et chercher des écritures de port avec des masques de 6 bits, sur le modèle des
-   `KB_C_P3_MASK` de l'Air60. Le harnais est dans `tools/f75_r2.py` du projet parent.
-2. **Sondage PCB** — un multimètre en continuité entre les pads du MCU et les diodes de matrice.
-   Plus lent, mais c'est la seule méthode qui produit une certitude.
+**Question 15 vs 16 colonnes : tranchée.** La table `@ 0x72F4` dimensionne 20 emplacements mais
+n'en peuple que 15. C'est bien **15** colonnes physiques.
+
+## Ce qui reste NON établi
+
+| Élément | État |
+| --- | --- |
+| Correspondance matrice de touches ↔ grille LED | ⚠️ le keymap suppose une correspondance 1:1 avec la grille OpenRGB — **non vérifiée** |
+| Rendu RGB (permutation ligne/couleur) | ❌ les 18 broches PWM sont déclarées, mais `indicators.c` n'est pas porté |
+| Broches inutilisées identifiées | ❓ `P0.0` `P0.1` `P0.5` `P0.6` `P4.1` `P4.4` `P4.5` `P4.7` `P5.5` `P5.6` `P7.4` `P7.7` — rôles inconnus (switches ? batterie ?) |
+| Veille | ❌ désactivée volontairement (`USER_SLEEP_NONE`) |
+| Sans-fil | ❌ hors périmètre, voir ci-dessous |
 
 ## Pourquoi le sans-fil est hors périmètre
 

@@ -38,21 +38,95 @@
 #define MATRIX_COLS 15
 
 /* -------------------------------------------------------------------------
- * Brochage -- NON ÉTABLI
+ * Brochage -- ÉTABLI PAR DÉSASSEMBLAGE, TRIPLEMENT RECOUPÉ
  *
- * Définir AULA_F75_PINMAP_VERIFIED seulement après avoir relevé ET vérifié
- * chaque broche. Ne pas recopier celles du NuPhy Air60 : même MCU et même
- * marquage BYK916 ne veulent pas dire même câblage de PCB.
+ * Sources concordantes :
+ *  1. init GPIO consolidée du firmware d'usine, fcn @ 0xA7EC :
+ *       P0CR=0x9C  P1CR=0x3F  P2CR=0x3F  P3CR=0x3F
+ *       P4CR=0x4D  P5CR=0x87  P6CR=0xFF  P7CR=0x60
+ *     (bit CR à 1 = sortie, cf. GPIO_OUTPUT dans platform/sh68f90/gpio.h)
+ *  2. table de saut de sélection de colonne @ 0x72F4 : 20 emplacements dont
+ *     15 peuplés, chaque handler relâchant la colonne précédente (setb) avant
+ *     de sélectionner la suivante (clr) -- l'emplacement 0 relâche P4.3, ce qui
+ *     ferme la boucle et fixe P4.3 comme dernière colonne.
+ *  3. portage indépendant tiagoluizo/smk@aula-f75-port, qui aboutit au même
+ *     brochage par une analyse séparée.
+ *
+ * Sélection de colonne ACTIVE BASSE. Lignes ACTIVES BASSES (pull-ups internes).
  * ------------------------------------------------------------------------- */
-#ifndef AULA_F75_PINMAP_VERIFIED
-#    error "AULA F75: brochage non établi. Voir docs/keyboards/aula-f75.md avant de compiler."
-#endif
+#define AULA_F75_PINMAP_VERIFIED 1
 
-/* Lignes de matrice : 6 broches                                    -- À RELEVER */
-/* Colonnes de matrice : 15 (ou 16) broches                         -- À RELEVER */
-/* Registres PWM de rétroéclairage, un par colonne                  -- À RELEVER */
-/* Broches RGB : R/G/B par ligne                                    -- À RELEVER */
-/* Switches de configuration (mode connexion / OS), s'ils existent  -- À RELEVER */
+/* Lignes -- entrées. Confirmé : P7CR=0x60 laisse P7.0-3 en entrée,
+ * P5CR=0x87 laisse P5.3 et P5.4 en entrée. */
+#define KB_R0_P7_0 _P7_0
+#define KB_R1_P7_1 _P7_1
+#define KB_R2_P7_2 _P7_2
+#define KB_R3_P7_3 _P7_3
+#define KB_R4_P5_3 _P5_3
+#define KB_R5_P5_4 _P5_4
+
+#define KB_R0 P7_0
+#define KB_R1 P7_1
+#define KB_R2 P7_2
+#define KB_R3 P7_3
+#define KB_R4 P5_3
+#define KB_R5 P5_4
+
+/* Colonnes -- sorties, dans l'ordre de scan lu dans la table @ 0x72F4 */
+#define KB_C0_P6_0  _P6_0
+#define KB_C1_P6_1  _P6_1
+#define KB_C2_P6_2  _P6_2
+#define KB_C3_P6_3  _P6_3
+#define KB_C4_P6_4  _P6_4
+#define KB_C5_P6_5  _P6_5
+#define KB_C6_P6_6  _P6_6
+#define KB_C7_P6_7  _P6_7
+#define KB_C8_P5_0  _P5_0
+#define KB_C9_P5_1  _P5_1
+#define KB_C10_P5_2 _P5_2
+#define KB_C11_P5_7 _P5_7
+#define KB_C12_P4_0 _P4_0
+#define KB_C13_P4_2 _P4_2
+#define KB_C14_P4_3 _P4_3
+
+#define KB_C0  P6_0
+#define KB_C1  P6_1
+#define KB_C2  P6_2
+#define KB_C3  P6_3
+#define KB_C4  P6_4
+#define KB_C5  P6_5
+#define KB_C6  P6_6
+#define KB_C7  P6_7
+#define KB_C8  P5_0
+#define KB_C9  P5_1
+#define KB_C10 P5_2
+#define KB_C11 P5_7
+#define KB_C12 P4_0
+#define KB_C13 P4_2
+#define KB_C14 P4_3
+
+/* Rétroéclairage : 18 sorties PWM = 6 lignes physiques de LED x R/G/B.
+ * Confirmé par P1CR=P2CR=P3CR=0x3F (les 18 broches PWM en sortie).
+ * Correspondance MCU déduite du NuPhy Air60 : PWM0x<->P3_x, PWM1x<->P2_x,
+ * PWM2x<->P1_x. Les colonnes de matrice servent de sélecteurs de multiplexage. */
+#define LED_PWM_C0  PWM00
+#define LED_PWM_C1  PWM01
+#define LED_PWM_C2  PWM02
+#define LED_PWM_C3  PWM03
+#define LED_PWM_C4  PWM04
+#define LED_PWM_C5  PWM05
+#define LED_PWM_C6  PWM10
+#define LED_PWM_C7  PWM11
+#define LED_PWM_C8  PWM12
+#define LED_PWM_C9  PWM13
+#define LED_PWM_C10 PWM14
+#define LED_PWM_C11 PWM15
+#define LED_PWM_C12 PWM20
+#define LED_PWM_C13 PWM21
+#define LED_PWM_C14 PWM22
+#define LED_PWM_C15 PWM23
+#define LED_PWM_C16 PWM24
+#define LED_PWM_C17 PWM25
 
 /* -------------------------------------------------------------------------
  * Liaison sans fil
