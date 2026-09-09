@@ -70,6 +70,36 @@ n'en peuple que 15. C'est bien **15** colonnes physiques.
 | Veille | ❌ désactivée volontairement (`USER_SLEEP_NONE`) |
 | Sans-fil | ❌ hors périmètre, voir ci-dessous |
 
+## RGB : pourquoi le rendu de l'Air60 n'est pas réutilisable
+
+Les deux claviers n'ont pas la **même topologie de matrice LED**, et c'est ça qui bloque, pas un
+détail de câblage.
+
+| | NuPhy Air60 | AULA F75 |
+| --- | --- | --- |
+| Colonnes LED | canaux **PWM** (`LED_PWM_C0` = `PWM40`, …) | colonnes de matrice en **GPIO simple**, sélecteurs de multiplexage |
+| Lignes LED | broches GPIO simples (`RGB_R0R`, `RGB_R0G`, …) | les **18 canaux PWM** = 6 lignes × R/G/B |
+
+C'est exactement l'inverse. Le rendu par défaut de SMK (`src/user/indicators_render.c`) est un
+stub vide, et celui de l'Air60 (`layouts/default/indicators.c`) est écrit pour sa topologie.
+**Ce portage n'a donc aucun RGB** — les `LED_PWM_C0..C17` de `kbdef.h` sont déclarés mais inutilisés
+tant qu'un `indicators.c` propre n'est pas écrit.
+
+### Ce qui est établi côté PWM
+
+- Le MCU a **25 canaux** : PWM0 (00-05), PWM1 (10-15), PWM2 (20-25), PWM3 (30-33), PWM4 (40-42).
+- Les **18** utilisés pour le RGB sont PWM0/1/2, confirmés par `P1CR=P2CR=P3CR=0x3F` dans l'init
+  d'usine.
+- La correspondance broche↔canal est déduite du NuPhy Air60 : `PWM0x↔P3_x`, `PWM1x↔P2_x`,
+  `PWM2x↔P1_x`, `PWM4x↔P5_x`. **Déduite, pas confirmée par datasheet.**
+- **Période PWM d'usine : `0x04B0` = 1200**, lue en `0x6707` (`PWM0PERDH=0x04`) et `0x670D`
+  (`PWM0PERDL=0xB0`). Le portage `tiagoluizo` reprogramme la sienne à `0x0400` = 1024 et calcule
+  ses rapports cycliques en conséquence (`0x0400 - (v << 2)`) — cohérent chez lui, mais **ce n'est
+  pas la valeur d'usine**.
+- Rapport cyclique **inversé** : 0 = éteint, 255 ≈ plein. Les LED sont donc à anode commune, le PWM
+  fait office de sink.
+- `PWM00CON` d'usine = `0x89` (`0x68D3`) = `PWM_MODE_ENABLE | PWM_SS | diviseur 1`.
+
 ## Pourquoi le sans-fil est hors périmètre
 
 Le NuPhy Air60 parle à son BK3632 en **SPI bit-bangé** (`RF_BB_SPI_*`, `src/platform/bb_spi.c`).
