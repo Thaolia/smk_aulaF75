@@ -191,17 +191,41 @@ Liaison **EUART0** vers le BK3632, en **half-duplex** :
 
 | Élément | Valeur |
 | --- | --- |
-| Trame | **6 octets** (`mov r5,#0x06` @ `0xAB0B`) |
+| Trame | **longueur variable**, 6 à 32 octets (r5 avant l'appel) |
 | Octet 0 | `0x01` (tête constante) |
 | Octet 1 | code de commande — **`0x04`, `0x05`, `0x08`, `0x09`** observés |
-| Octets 2-5 | charge utile |
+| Octets 2+ | charge utile |
+
+Longueurs observées aux points d'appel : `0x1E` (30) @ `0x46C2`, `0x0D` (13) @ `0x4730`,
+`0x20` (32) @ `0xA376`, `0x17` (23) @ `0xB0B8`, `0x06` @ `0xED53`. Le maximum de 32 octets
+correspond exactement à la taille du buffer TX, qui s'arrête juste avant le buffer RX.
 | Broche de direction | **`P0.2`** — `clr P0.2` + `orl P0CR,#0x04` avant émission (`0xAB13`), relâchée en fin de trame par l'ISR (`anl P0CR,#0xFB` puis `setb P0.2`) |
 | Routine d'envoi | `fcn @ 0xAB08` (charge nulle) / `0xAB09` (charge dans A) → `0xAB0F` |
-| Buffers | TX en IDATA `0x33`, RX en IDATA `0x54` (23 o) |
+| Buffers | TX en IDATA `0x33`-`0x52` (**32 o**), RX en IDATA `0x54` (23 o) |
 | Drapeau émission | `0x2C.1` |
 
 La commande `0x09` est émise depuis `main()` (`0x9148`, `0x914D`) — probablement l'initialisation
 du lien.
+
+### Pas de firmware BK3632 embarqué — vérifié
+
+Hypothèse testée : le 8051 embarquerait-il l'image du BK3632 pour la lui pousser par le lien série ?
+**Non**, et c'est mesuré, pas supposé.
+
+1. **Place disponible.** Le firmware d'usine fait 61 440 o et son dernier octet significatif est en
+   `0xEFC3` : il reste **60 octets libres**. Le BK3632 a **160 Ko** de flash. Une image complète ne
+   peut pas y tenir.
+2. **Profil d'entropie.** Balayage par blocs de 512 o : **aucun bloc au-dessus de 6,53**. Pas de
+   zone compressée ni chiffrée. Du code ARM9 se situerait autour de 6 — mais les seules zones non
+   codées sont à l'inverse *très basses* : `0xB200`-`0xC400` (entropie 1,10, **87 % de zéros**) et
+   `0xC600`-`0xEC00` (1,20, **93 % de zéros**). Ce sont des tables creuses — bitmaps et keymaps par
+   couche — pas du code.
+3. **Débit du lien.** Le buffer TX fait 32 octets et la plus longue trame observée en fait 32.
+   Rien n'indique un chemin de transfert en volume.
+
+Conclusion : le firmware du BK3632 réside **dans le BK3632**. Pour l'obtenir il faut le lire sur
+la puce (voie B ci-dessous), et pour comprendre le protocole il vaut mieux écouter le lien
+(voie A).
 
 ### Deux voies pour obtenir la sémantique
 
