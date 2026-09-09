@@ -199,7 +199,9 @@ Liaison **EUART0** vers le BK3632, en **half-duplex** :
 Longueurs observées aux points d'appel : `0x1E` (30) @ `0x46C2`, `0x0D` (13) @ `0x4730`,
 `0x20` (32) @ `0xA376`, `0x17` (23) @ `0xB0B8`, `0x06` @ `0xED53`. Le maximum de 32 octets
 correspond exactement à la taille du buffer TX, qui s'arrête juste avant le buffer RX.
-| Broche de direction | **`P0.2`** — `clr P0.2` + `orl P0CR,#0x04` avant émission (`0xAB13`), relâchée en fin de trame par l'ISR (`anl P0CR,#0xFB` puis `setb P0.2`) |
+| TXD / RXD | **`P5.5`** / **`P5.6`** (broches distinctes : lien full-duplex) |
+| Handshake | **`P0.2`** — mis à 0 avant émission (`0xAB13`), relâché en fin de trame par l'ISR (`0xA580`) |
+| Format | mode 1, **8N1**, `Baud = Fsys / 92` (`0xB1CE`) |
 | Routine d'envoi | `fcn @ 0xAB08` (charge nulle) / `0xAB09` (charge dans A) → `0xAB0F` |
 | Buffers | TX en IDATA `0x33`-`0x52` (**32 o**), RX en IDATA `0x54` (23 o) |
 | Drapeau émission | `0x2C.1` |
@@ -229,7 +231,69 @@ la puce (voie B ci-dessous), et pour comprendre le protocole il vaut mieux écou
 
 ### Deux voies pour obtenir la sémantique
 
-#### A. Sniffer la liaison EUART0 — **recommandé**
+#### A. Sniffer la liaison EUART0 — **recommandé, et SANS FLASHER**
+
+**Aucun flashage. Le clavier tourne avec son firmware d'usine.** On écoute passivement le fil entre
+le 8051 et le BK3632. Risque nul pour l'appareil.
+
+##### Où sonder
+
+Le datasheet donne les broches d'EUART0 :
+
+| Signal | Broche | Sens |
+| --- | --- | --- |
+| **TXD** | **P5.5** | 8051 → BK3632 |
+| **RXD** | **P5.6** | BK3632 → 8051 |
+| handshake | `P0.2` | mis à 0 avant chaque trame, relâché à la fin (optionnel, 3ᵉ voie) |
+
+⚠️ **Correction** : une lecture antérieure de ce document décrivait le lien comme *half-duplex avec
+la direction sur `P0.2`*. C'est faux. `TXD` et `RXD` sont **deux broches distinctes** — le lien est
+full-duplex. `P0.2` est un signal d'attention vers le BK3632, pas un sélecteur de direction :
+`clr P0.2` + `P0CR |= 0x04` (sortie) avant l'émission (`0xAB13`), puis `P0CR &= ~0x04` (entrée) +
+`setb P0.2` en fin de trame, dans l'ISR (`0xA580`).
+
+Conséquence pratique heureuse : **deux voies d'analyseur capturent les deux directions séparément**,
+sans démultiplexage.
+
+##### Comment configurer l'analyseur
+
+Configuration relevée dans le firmware d'usine (`0xB1CE`) :
+
+```asm
+mov SCON,  #0x50   ; mode 1 : asynchrone, 10 bits (1 start, 8 data, 1 stop) = 8N1, REN=1
+mov SBRTH, #0xFF   ; SBRTEN=1, SBRT[14:8]=0x7F
+mov SBRTL, #0xFB   ; SBRT[7:0]=0xFB      -> SBRT = 0x7FFB = 32763
+mov SFINE, #0x0C   ; BFINE = 12
+```
+
+Formule du datasheet : `Baud = Fsys / (16 × (32768 − SBRT) + BFINE)`
+
+→ `Fsys / (16 × 5 + 12)` = **`Fsys / 92`**, soit **≈ 260 870 baud** si `Fsys` = 24 MHz,
+ou ≈ 130 435 si le cœur tourne à 12 MHz (le datasheet mentionne le RC 24 MHz divisé par 2 quand
+l'USB est utilisé — non tranché ici).
+
+**En pratique, ne pas se fier à ce calcul :** un analyseur logique mesure la largeur du bit le plus
+court et en déduit le débit. PulseView (sigrok) et Saleae le font automatiquement. Le calcul sert à
+vérifier que la mesure est plausible.
+
+##### Quoi capturer
+
+Ce qu'on sait déjà chercher (voir le tableau du transport plus haut) : trames commençant par
+`0x01`, deuxième octet = commande (`0x04`, `0x05`, `0x08`, `0x09` observés), longueur variable de
+6 à 32 octets.
+
+Séquences à enregistrer, chacune isolément :
+
+1. Branchement USB puis bascule en Bluetooth — la commande `0x09` part de `main()` (`0x9148`), donc
+   quelque chose passe dès l'initialisation.
+2. Appairage d'un hôte Bluetooth.
+3. Bascule vers 2.4 G.
+4. Quelques appuis de touches dans chaque mode — pour isoler la trame « rapport HID ».
+5. Mise en veille et réveil.
+
+En croisant ces captures avec les cinq sites d'émission déjà localisés (`0x46C2` 30 o, `0x4730`
+13 o, `0xA376` 32 o, `0xB0B8` 23 o, `0xED53` 6 o), on relie chaque commande à son déclencheur.
+
 
 Le transport est déjà caractérisé (ci-dessus). Il suffit d'un analyseur logique sur la ligne de
 données du lien 8051 ↔ BK3632, en manipulant le clavier : bascule USB / BT / 2.4 G, appairage,
