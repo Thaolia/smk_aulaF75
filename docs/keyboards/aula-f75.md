@@ -227,17 +227,53 @@ documente** comme « transcrites du firmware d'usine » — confirmation indépe
 - **Il détient les noms Bluetooth.** La commande `0x09`, émise deux fois depuis `main()`, lui pousse
   `"AULA-F75 3.0 KB "` et `"AULA-F75 5.0 KB "` depuis la flash du 8051 (`0xAF6D`).
 
-### Caractéristiques annoncées par le fabricant
+### Datasheet BK3633 — source primaire pour la famille
 
-SoC sans fil 2,4 GHz, **Bluetooth 5.0 dual-mode + protocole propriétaire**, boîtier **QFN32**,
-**20 Ko de RAM**, **160 Ko de flash**, positionné pour les télécommandes, claviers et souris.
+Le datasheet **BK3633 V0.9** (26 pages, Beken) documente le frère direct du BK3632. Attention :
+**ce n'est pas le BK3632**, et les chiffres peuvent différer d'un membre à l'autre.
 
-⚠️ Ces chiffres proviennent d'un **résumé de moteur de recherche**, pas d'une fiche technique lue
-directement. La page produit Beken est rendue en JavaScript et n'a pas pu être extraite. À traiter
-comme indicatif.
+| | BK3633 (datasheet) |
+| --- | --- |
+| Cœur | **RISC 32 bits**, jusqu'à **80 MHz** |
+| RAM | **80 Ko** de mémoire de données |
+| Flash | **500 Ko** programmable |
+| Radio | Bluetooth **5.2 dual-mode** + 2,4 GHz propriétaire |
+| Consommation | ~5 mA en fonctionnement, < 1 µA en sommeil profond |
+| Boîtiers | QFN32 4×4, QFN40 5×5, QFN48 6×6 |
+| Interfaces | **2 UART et téléchargement UART**, I²C, SPI jusqu'à 96 MHz, USB hôte et device, 6 PWM, ADC 10 bits, JTAG sécurisé, AES128, eFUSE |
 
-Le catalogue Beken confirme au moins les catégories : « Bluetooth LE SoCs », « Dual-mode Bluetooth
-SoCs », « Proprietary Chips », et une application dédiée « Wireless Keyboard & Mouse ».
+⚠️ **Correction** : une version antérieure de ce document annonçait « ARM9, 20 Ko de RAM, 160 Ko de
+flash » pour le BK3632. Ces chiffres venaient d'un **résumé de moteur de recherche**, pas d'une
+fiche technique. Le datasheet du BK3633 donne des valeurs très différentes. Les caractéristiques
+exactes du **BK3632** restent non vérifiées.
+
+### Trois interfaces de dump, nommées par le datasheet
+
+> « At the beginning of the chip starts up, the chip will enter **programming mode, JTAG mode or
+> normal** according received command from **Mode Selecting Pin**. »
+
+Table 4 du datasheet, multiplexage des GPIO :
+
+| GPIO | Normal | Mode PROGRAM | Mode JTAG |
+| --- | --- | --- | --- |
+| `GPIOA[0]` | `UART_TX` / SCL / USBDN | **`DL_UART_TX`** | — |
+| `GPIOA[1]` | `UART_RX` / SDA / USBDP | **`DL_UART_RX`** | — |
+| `GPIOA[3]` | SDA | — | `JTAG_NTRST` |
+| `GPIOA[4]` | `SPI_SCK` | `SPI_MOSI` | `JTAG_TDI` |
+| `GPIOA[5]` | `SPI_MOSI` | `SPI_MISO` | `JTAG_TDO` |
+| `GPIOA[6]` | `SPI_MISO` / PWM[5] | `SPI_SCK` | `JTAG_TCK` |
+| `GPIOA[7]` | `SPI_NSS` / PWM[4] | `SPI_CS` | `JTAG_TMS` |
+| `GPIOB[6]` / `[7]` | `UART2_TX` / `UART2_RX` | — | — |
+
+**« DL » = DownLoad.** Le téléchargement UART passe donc par `GPIOA[0]` et `GPIOA[1]`.
+
+Sur le **QFN32**, ces deux broches sont les n° **23 (`P00_USBDN`)** et **24 (`P01_USBDP`)** — les
+mêmes que les lignes USB D−/D+, multiplexées.
+
+Trois voies existent donc, toutes documentées : **UART**, **SPI** et **JTAG**. Le mécanisme de
+sélection — « une commande reçue sur la Mode Selecting Pin au démarrage » — n'est **pas détaillé**
+dans ce datasheet abrégé. Mais la formulation recoupe exactement ce qu'on sait déjà : sur BK7231 on
+spamme `0xD2` en SPI pendant le reset, et le BIM attend un `LINK_CHECK` en UART.
 
 ### Déduit du BK3432, son proche parent — **pas le même composant**
 
