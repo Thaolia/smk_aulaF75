@@ -214,6 +214,118 @@ Appelée depuis `main()` (`0x9197`) et depuis `fcn.000005EA`, la grosse fonction
 la copie se fait USB masqué parce que le chemin USB touche aussi `0x009D`. Le réglage par les
 touches et le réglage par l'hôte se disputent la même variable ; cette fonction arbitre.
 
+### `0xA4BD` — le second poseur de `0x2C.7`, résolu
+
+`0x2C.7` (« publier l'effet ») a deux producteurs. Le premier, `0x0A71`, est le chemin
+utilisateur déjà documenté. Voici le second.
+
+#### Comment on y arrive : un dispatcher à table de sauts sur `XRAM 0x0D17`
+
+`0xA674` :
+
+```asm
+mov dptr,#0x0d15 ; movx a,@dptr ; jnz 0xa67d
+jb  0x2a.3, sortie
+mov dptr,#0x0d17 ; movx a,@dptr
+cjne a,#0x0a, .+3 ; jnc sortie      ; rejette 0x0D17 >= 10
+mov dptr,#0xa68d
+mov r0,a ; add a,r0 ; add a,r0      ; index x 3
+jmp @a+dptr
+```
+
+Table de 10 entrées de 3 octets en `0xA68D` :
+
+| `0x0D17` | cible |
+| --- | --- |
+| 0, 9 | `ljmp 0x83D2` |
+| 1 | — |
+| 2 | `ljmp 0x9363` |
+| 3 | `ljmp 0x8C0F` |
+| 4 | `0xA6C6` |
+| **5, 6, 7** | **`ljmp 0xA468`** |
+| 8 | `0xA6D2` |
+
+`XRAM 0x0D17` est donc un **index de mode, 0 à 9**, et les modes 5, 6 et 7 partagent le même
+handler — d'où le fait que `0xA468` les re-teste un par un en interne. Chaque autre branche est
+gardée par `jb 0x2a.5` et `jb 0x23.3` ; la branche 5/6/7 ne l'est pas, parce que `0xA468` gère
+lui-même le verrou `0x2A.5`.
+
+*Ce que `0x0D17` désigne concrètement n'est pas établi.* Le dispatcher, ses bornes et le partage
+5/6/7 le sont.
+
+#### `fcn @ 0xA468` — deux transitions symétriques autour de l'effet `0x2D`
+
+Le tout est verrouillé par `0x2A.5`, et sort immédiatement si `0x28.2` est posé.
+
+**Entrée, `0xA483`** — si `0x0D17 ∈ {5, 7}`, effet courant `0x009D == 0x20`, verrou libre :
+
+```asm
+setb 0x24.5      ; drapeau teste par euart0.parse (0x0632, 0x07A5)
+setb 0x2a.5      ; verrou « effet temporaire actif »
+setb 0x24.1
+setb 0x27.7
+movx [0x0e24], a ; a == 0x20 : l'effet a restaurer, dans « effet en attente »
+movx [0x009d], #0x2d   ; effet courant force a 0x2D
+```
+
+**Sortie, `0xA4BD`** — si (`0x0D17 == 7` ou `== 6`), effet courant `== 0x2D`, verrou posé :
+
+```asm
+setb 0x2c.7      ; publier l'effet      <-- le second producteur
+clr  0x2a.5      ; libere le verrou
+clr  0x24.5
+movx [0x08c0], [0x0d18]
+movx [0x08c1], #0x00
+movx [0x08c2], #0x02
+setb 0x27.4      ; sonnette
+clr  0x2c.0      ; reautorise le parsing EUART0
+```
+
+L'effet `0x2D` est donc un **effet temporaire** : le firmware range l'effet courant `0x20` dans
+`0x0E24`, bascule sur `0x2D` tant que le mode le justifie, puis republie en sortant. C'est le
+même mécanisme « effet en attente → effet courant » que le chemin utilisateur, déclenché par un
+changement de mode au lieu d'une touche.
+
+#### `clr 0x2C.0` — ce que la sortie débloque
+
+`isr.timer2` teste ce bit en `0xA504` :
+
+```asm
+jb 0x2c.0, 0xa51c      ; saute par-dessus le `lcall euart0.parse` de 0xA519
+```
+
+Tant que `0x2C.0` est posé, **les trames EUART0 reçues ne sont pas analysées**. La sortie du
+mode temporaire les réautorise. Le lien entre le RGB et le sans-fil passe donc aussi par là.
+
+#### `0x08C0` n'est pas un tampon RGB : c'est un rapport HID
+
+Huit sites écrivent la même structure de 3 octets en `0x08C0` puis posent `0x27.4` (`0x84D6`,
+`0x8900`, `0x8CE5`, `0x8F94`, `0x9412`, `0xA4C3`, `0xB041`, plus `0x05AB`). C'est un idiome
+partagé, pas une particularité de ce chemin.
+
+`fcn.00006ACF` est le **seul** consommateur de `0x27.4` — un dispatcher qui parcourt les
+drapeaux en attente par ordre de priorité :
+
+```asm
+jnb  0x27.4, suivant
+setb 0x26.7
+clr  0x27.4
+movx [0x0f0c], #0x02
+movx [0x08bf], #0x03          ; a = 2 puis inc a
+movx [0x0f0f], #0x01
+movx [0x0f10], #0x08
+mov  a, #0xbf
+ljmp 0x6c07
+```
+
+`0x0F0F..0x0F11 = 01 08 BF` est un **pointeur générique** vers `0x08BF` — l'adresse même du
+tampon écrit juste au-dessus. Le drapeau suivant (`0x2A.6`) suit le même schéma avec
+`01 09 80` → `0x0980`. Et l'octet 0 du tampon vaut `0x0F0C + 1` : **3** ici, **4** pour le
+suivant. Ce sont des **Report ID HID**.
+
+Le « message » de `0xA4BD` est donc le rapport HID `03 <0x0D18> 00 02` poussé vers l'hôte —
+la notification d'un changement d'état, pas une couleur.
+
 ### Comment le firmware choisit un effet
 
 Chaîne complète, du réglage à l'application :
@@ -1325,12 +1437,6 @@ C'est une cinquième source indépendante, et elle n'a pas été cherchée pour 
 
 > ⚠️ Cette routine n'a **jamais été exécutée** : rien n'a été flashé sur l'appareil. Ce qui
 > précède est du désassemblage, pas de l'observation.
-
-### Reste ouvert
-
-`0xA4BD` — second poseur du drapeau `0x2C.7`, à côté de `0x0A71` déjà documenté. Il efface
-`0x2A.5` et `0x24.5` puis recopie XDATA `0x0D18` vers `0x08C0`, sur la condition
-`XDATA 0x009D == 0x2D` et `XDATA 0x0D17 == 0x06`. Non analysé.
 
 ## Récupération : ce que le bootloader garantit vraiment
 
