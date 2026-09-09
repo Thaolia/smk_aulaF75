@@ -65,7 +65,9 @@ n'en peuple que 15. C'est bien **15** colonnes physiques.
 | Élément | État |
 | --- | --- |
 | Correspondance matrice de touches ↔ grille LED | ✅ **vérifiée** par capture HID indépendante — voir ci-dessous |
-| Rendu RGB (permutation ligne/couleur) | ❌ les 18 broches PWM sont déclarées, mais `indicators.c` n'est pas porté |
+| Ordre de chargement des 18 canaux PWM | ✅ **relevé et implémenté** (`aula_rgb.c`) |
+| Correspondance canal ↔ (ligne, couleur) | ❌ demande une observation sur matériel |
+| Câblage du rendu dans la boucle SMK | ❌ inadéquation d'architecture, voir ci-dessous |
 | Rotation d'encodeur | ❌ non implémentée (phases identifiées : `P0.5` / `P0.6`) |
 | Broches au rôle inconnu | ❓ `P0.0` `P0.1` `P4.1` `P4.4` `P4.5` `P4.7` `P5.5` `P5.6` `P7.4` `P7.7` |
 | Veille | ✅ **implémentée** — transcrite du firmware d'usine, non testée sur matériel |
@@ -108,6 +110,38 @@ C'est exactement l'inverse. Le rendu par défaut de SMK (`src/user/indicators_re
 stub vide, et celui de l'Air60 (`layouts/default/indicators.c`) est écrit pour sa topologie.
 **Ce portage n'a donc aucun RGB** — les `LED_PWM_C0..C17` de `kbdef.h` sont déclarés mais inutilisés
 tant qu'un `indicators.c` propre n'est pas écrit.
+
+### Ordre de chargement des canaux — relevé
+
+`fcn @ 0x6E61` lit **36 octets consécutifs** du framebuffer (base XRAM `0x05A2` + colonne × 36) et
+les écrit dans les registres `DUTY2`, en **gros-boutiste** (poids fort d'abord), en alternant les
+deux DPTR via `INSCON` :
+
+| Octets | Canaux | Broches |
+| --- | --- | --- |
+| 0-11 | `PWM20`…`PWM25` | P1.0…P1.5 |
+| 12-23 | `PWM10`…`PWM15` | P2.0…P2.5 |
+| 24-29 | **`PWM03`, `PWM04`, `PWM05`** | P3.3…P3.5 |
+| 30-35 | **`PWM00`, `PWM01`, `PWM02`** | P3.0…P3.2 |
+
+**Une seule irrégularité, et elle est délibérée : rotation de 3 dans le groupe P3** — `PWM03-05`
+sont chargés *avant* `PWM00-02`. Les adresses ont été recoupées avec la carte XDATA `0xFF80-0xFFFF`
+du datasheet SH68F90 CV2.0.
+
+C'est le contenu de `aula_rgb.c`. **Ce qui reste inconnu : quel canal allume quelle
+(ligne, couleur).** On sait dans quel ordre l'usine charge les registres, pas ce que chacun pilote.
+Trancher demande d'écrire une seule voie et de regarder quelle LED s'allume — donc du matériel.
+
+### Inadéquation d'architecture avec SMK
+
+Le rendu par colonne exige de recharger les 18 duties **à chaque avance de colonne**. Dans le
+firmware d'usine, c'est l'ISR `_INT_PWM0` qui possède l'avance de colonne — et qui en profite pour
+lire les lignes de la matrice au passage (`0x73A6`).
+
+SMK est bâti pour la topologie inverse : `src/smk/matrix.c` possède sa propre boucle de colonnes,
+et `pwm_interrupt_handler` n'est qu'un **stub vide**. Faire cohabiter les deux demande un choix
+d'architecture — soit l'ISR reprend la main sur les colonnes comme en usine, soit le rechargement
+se greffe dans la boucle de scan — et ce choix ne se valide pas sans matériel.
 
 ### Ce qui est établi côté PWM
 

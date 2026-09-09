@@ -144,7 +144,9 @@ possible_src_keyboard = [
     'user_init.c',
     'user_sleep.c',
     # 'user_keyboard.c',
-    'kb.c'
+    'kb.c',
+    # Sources optionnelles propres a un clavier ; ignorees si le fichier n'existe pas.
+    'aula_rgb.c'
 ]
 
 possible_src_layout = [
