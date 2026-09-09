@@ -188,6 +188,53 @@ se greffe dans la boucle de scan — et ce choix ne se valide pas sans matériel
   fait office de sink.
 - `PWM00CON` d'usine = `0x89` (`0x68D3`) = `PWM_MODE_ENABLE | PWM_SS | diviseur 1`.
 
+## `fcn.0000AF99` — publication de l'effet RGB, protégée contre l'USB
+
+Appelée depuis `main()` (`0x9197`) et depuis `fcn.000005EA`, la grosse fonction périodique.
+
+```asm
+0xaf99   jnb  0x2c.7, 0xafc3     ; rien a faire si le drapeau n'est pas pose
+0xaf9c   clr  0x2c.7             ; acquitte
+0xaf9e   anl  IEN1, #0xfe        ; masque EUSB -- l'interruption USB
+0xafa1   mov  dptr,#0x0e24 ; movx a,@dptr
+0xafa5   cjne a, #0x20, 0xafb6   ; cas particulier si l'effet vaut 32
+0xafa8     mov r4,#0xca ; rrc a  ; 202 et 101
+0xafb3     lcall 0xaac1
+0xafb6   clr  0x24.5
+0xafb8   mov  dptr,#0x0e24 ; movx a,@dptr
+0xafbc   mov  dptr,#0x009d ; movx @dptr,a    ; publie l'effet
+0xafc0   orl  IEN1, #0x01        ; demasque EUSB
+0xafc3   ret
+```
+
+`IEN1` bit 0 = **`EUSB`**, confirmé deux fois : header SMK (`#define _EUSB (1u << 0)`) et datasheet
+(`IEN1 A9H : - ES0 EPWM4 EPWM3 EPWM2 EPWM1 EPWM0 EUSB`).
+
+**C'est une section critique.** `0x0E24` porte l'effet *en attente*, `0x009D` l'effet *courant*, et
+la copie se fait USB masqué parce que le chemin USB touche aussi `0x009D`. Le réglage par les
+touches et le réglage par l'hôte se disputent la même variable ; cette fonction arbitre.
+
+### `XRAM 0x009D` — index d'effet RGB
+
+Vingt sites y accèdent. Trois convergences l'identifient :
+
+- `0x4494` y écrit `0x20` (32) — la valeur même que teste `fcn.0000AF99`
+- `0x52CC` et `0x5377` le comparent à `9`
+- `0x15E7`, `0x15FA`, `0x8C30`, `0x8C47` s'en servent pour **indexer deux tables en flash**
+
+| Base | Contenu | Étendue |
+| --- | --- | --- |
+| `0xA8BC` | `00`, puis `04` × 23, puis `00` | index 0-24 |
+| `0xA8D5` | `00`, puis `09` × 32 | index 0-32 |
+
+Le code reprend en `0xA8F6`. Index 0 donne zéro, tous les autres une constante : ce sont des
+**paramètres par mode**, le mode 0 étant traité à part — vraisemblablement « éteint ». L'index monte
+au moins à 32, ce qui couvre le `0x20` de `0x4494`.
+
+*Inférence restante : que ces constantes soient des paramètres d'effet RGB. La convergence est
+forte — index borné, mode 0 nul, écriture depuis le chemin USB, arbitrage contre l'ISR USB — mais
+aucune n'a été suivie jusqu'à un registre PWM.*
+
 ## Veille — implémentée
 
 Transcrite de la séquence d'usine. Le mécanisme de réveil est : **toutes les colonnes tenues
