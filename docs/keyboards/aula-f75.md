@@ -1903,9 +1903,51 @@ La grille `0xD800 + n × 512` établie depuis l'offset 0 du bloc de réglages re
 **adressage**. Mais la frontière réelle des données est ailleurs : elle passe entre la page 109 et
 la page 110, pas à `0xD800`.
 
-> *Reste ouvert :* pourquoi `0x41` ne lit qu'une page sur deux parmi les huit marquées (102, 104,
-> 106, 108 — jamais 103, 105, 107, 109), et ce que deviennent les 520 octets non relus de chacune
-> de ses régions de 1024. Le pas de 1024 avec une lecture de 504 ne se referme pas.
+##### Pourquoi `0x41` semble sauter une page sur deux — résolu
+
+Il n'en saute aucune : les pages « manquantes » sont couvertes par **d'autres opcodes**. Les bases
+des trois derniers handlers complètent la carte.
+
+| Opcode | Base | Page(s) | Blocs × 14 | Contenu |
+| --- | --- | --- | --- | --- |
+| `0x44` | `0xC600` | 99 | 10 → **140** | **bloc de réglages** |
+| `0x49` | `0xC800` | 100 | 35 → **490** | palettes |
+| `0x42` | `0xCA00` | 101 | 27 → **378** | **table de couleurs** |
+| `0x41` | `0xCC00` +1024 | 102, 104, 106, 108 | 36 → **504** | — |
+| `0x43` | `0xDC00` +512 | 110 – 117 | 37 → **512** | — |
+| `0x4A` | *aucune* | — | 1 × 2 | charge mise à zéro |
+
+Deux comptes se vérifient d'eux-mêmes :
+
+- `0x44` annonce **10 = ⌈128 / 14⌉**, et le bloc de réglages fait exactement **128 octets**. C'est
+  la **troisième** dérivation indépendante de cette taille, après les boucles de copie de
+  `settings_restore` / `settings_save` et l'argument de longueur de `flash_read_block`.
+- `0x42` annonce 378, la taille exacte de la table de couleurs remplie par le chemin d'écriture.
+
+##### Ce qui reste vraiment, et c'est plus intéressant
+
+La carte couvre les pages 99 à 117 **sauf 103, 105, 107 et 109**. Or ce ne sont pas des pages
+vides : elles portent le tampon `5A A5` et, pour la 103, **cent octets non nuls — c'est la table
+de remap `0xCE00`**.
+
+L'explication tient au pas de `0x41` : ses régions font **1024 octets**, donc chacune couvre
+*deux* pages — 102-103, 104-105, 106-107, 108-109. Les pages « manquantes » sont la **seconde
+moitié** de ses régions. Il n'annonce que 504 octets, ce qui s'arrête dans la première page.
+
+Et l'adressage n'est pas borné :
+
+```asm
+a = [0x0D14] ; B = 14 ; mul ab      ; offset = sequence x 14
+pointeur = base + offset            ; aucun controle de borne
+```
+
+Le compte est **consultatif** : il est renvoyé à l'hôte en `IDATA[0x37]`, et rien dans le firmware
+n'empêche une requête de séquence plus élevée. `0xCC00 + 36 × 14 = 0xCDF8` — la séquence 36
+chevauche déjà la page 103, et les séquences 37 à 73 la couvriraient entièrement.
+
+> **Donc la table de remap est lisible par l'opcode `0x41`, sous-index 0, aux séquences ≥ 36** —
+> au-delà du compte annoncé. C'est vérifiable : il suffirait de demander ces séquences. Non tenté,
+> rien n'ayant jamais été envoyé à l'appareil.
 
 #### L'opcode `0x43` — un second niveau de dispatch, et ce que valent les 518 octets
 
