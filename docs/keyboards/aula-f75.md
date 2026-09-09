@@ -1312,7 +1312,7 @@ couple *vitesse / luminosité* avec des indicateurs, même si les noms restent �
 
 Les deux destinations de l'enregistrement par effet sont identifiées.
 
-##### `XRAM 0x0D19` — la vitesse (27 références)
+##### `XRAM 0x0D19` — la **luminosité** (27 références)
 
 `fcn.0000A0F0` — appelée depuis douze sites de rendu — s'en sert comme index :
 
@@ -1344,6 +1344,13 @@ Le maximum est **par effet**, lu dans une table CODE :
 ```
 
 Valeur par défaut **4** (`0x1D10`, `0x1D31`). Valeur dans le dump : **9**, soit le maximum.
+
+> **Correction.** J'avais d'abord nommé `0x0D19` « vitesse ». C'est la **luminosité**.
+> `fcn.00000056` est bien une division (`div ab`, vérifiée), donc `fcn.0000A0F0` calcule
+> `x × table[0x0D19] / 80` — un facteur de 0 à 1 en dix pas. Et les trois grandeurs qu'il met à
+> l'échelle sont `0x0000`, `0x011D` et `0x0E25`, toutes trois écrites **juste après la lecture de
+> palette** dans `fcn.00004EA9` (`0x4ED9`, `0x4F1F`) : ce sont les trois composantes de couleur.
+> Trois composantes, un seul facteur — c'est une commande de luminosité, pas de vitesse.
 
 ##### `XRAM 0x011C` — le mode de couleur (30 références)
 
@@ -1380,6 +1387,83 @@ Donc **`0x011C` de 0 à 6 sélectionne une couleur fixe de la palette, et 7 est 
 
 Son maximum est lui aussi par effet, dans `CODE[0xA8A3 + effet]` (`0x939F`, `0x93B4`).
 
+#### `0x0D9D` — la vitesse, et `0x0896` — la palette par effet
+
+##### `XRAM 0x0D9D` — la vitesse (26 références)
+
+Restaurée de l'**offset 7** du bloc (`0x1130`) et resauvegardée vers lui (`0x8F4B`), bornée par
+`CODE[0xA8BC + effet]` = 4, avec la même mécanique incrémenter/saturer que les autres
+(`0x8EED`–`0x8F30`).
+
+Ce qui la caractérise : elle indexe **quinze tables CODE de cinq valeurs décroissantes**, chacune
+câblée en dur dans une fonction de rendu différente.
+
+| Table | Valeurs |
+| --- | --- |
+| `0x2FE9` | 120 100 80 50 20 |
+| `0x2FEE` | 60 50 40 30 20 |
+| `0x2FF3` | 45 35 25 15 5 |
+| `0x2FF8` | 45 35 25 15 6 |
+| `0x2FFD` | 80 60 40 20 8 |
+| `0x3002` | 20 15 10 5 1 |
+| `0x3007` | 88 68 48 28 8 |
+| `0x300C` | 115 100 85 60 30 |
+| `0x3011` | 120 90 70 45 1 |
+| `0x3016` | 30 24 18 12 6 |
+| `0x301B` | 32 24 18 16 6 |
+| `0x3020` | 115 95 75 55 30 |
+| `0x3025` | 32 24 16 8 1 |
+| `0x302A` | 46 36 26 16 6 |
+| `0x302F` | 50 40 30 20 8 |
+
+**Quinze tables — et la famille A compte exactement quinze effets (0 à 14).** Cinq valeurs, et le
+maximum vaut 4. Décroissantes : plus l'indice monte, plus la période est courte. C'est la vitesse,
+avec une plage propre à chaque effet.
+
+Valeur dans le dump : **4**, soit le maximum.
+
+##### `XRAM 0x0896` — l'effet dont on lit la palette (23 références)
+
+Les fonctions de rendu font `0xC800 + [0x0896] × 21`. Les valeurs auxquelles `0x0896` est comparé
+sont parlantes : `xrl a,#0x0d` (`0x5E0C`, `0x6630`), `cjne a,#0x0A` (`0xA3F7`, `0xA42D`),
+`xrl a,#0x01` (`0x7476`), et `add a,#0xE0` — c'est-à-dire une comparaison à `0x20`. **Ce sont les
+plages des deux familles d'effets.**
+
+Vérification sur le dump, en supposant `0x0896` = index d'effet :
+
+| Effet | Adresse | Page | Palette |
+| --- | --- | --- | --- |
+| `0x00` | `0xC800` | 100 | rouge vert bleu jaune magenta cyan blanc |
+| `0x04` | `0xC854` | 100 | *idem* |
+| `0x0E` | `0xC926` | 100 | *idem* |
+| `0x20` | `0xCAA0` | 101 | tout noir |
+| `0x2D` | `0xCBB1` | 101 | tout noir |
+
+Les quinze effets de la famille A portent chacun leur palette de sept couleurs, toutes réglées
+sur la palette d'usine ; ceux de la famille B sont à zéro — ils n'utilisent pas de palette, ce qui
+est cohérent avec leur maximum de couleur plus bas (4 au lieu de 7). Les adresses tombent
+entièrement dans les pages 100 et 101 de la zone IAP.
+
+##### L'offset 5 est l'aiguillage global / par effet
+
+```asm
+0x111B  mov dptr,#0x0312 ; movx a,@dptr
+0x111F  jz 0x1144                        ; == 0 -> parametres PAR EFFET
+        ... lit les offsets 8, 6, 7  (0x0315, 0x0313, 0x0314)  -> globaux
+0x1144  ... lit le tableau par effet
+```
+
+Le dump donne l'offset 5 à **0**, donc le clavier était en mode **par effet** — ce qui explique
+que la luminosité effective soit 9 (issue de l'enregistrement) et non 4 (la copie globale à
+l'offset 6).
+
+##### Et les bits 6-4 de `b1`
+
+**Ma piste était fausse.** Le troisième paramètre borné à 4 est `0x0D9D`, une variable globale
+restaurée de l'offset 7 — pas un champ de l'enregistrement par effet. Les bits 6-4 de `b1`
+(valeur 3 dans le dump) ne sont lus par **aucun** des masques identifiés : `0x0F` en `0x117E`,
+`0x8F` en `0x8F6A`. Ils restent non attribués.
+
 ##### Trois tables de bornes par effet
 
 `0xA8A3`, `0xA8BC`, `0xA8D5` — espacées de `0x19` = 25 :
@@ -1387,11 +1471,11 @@ Son maximum est lui aussi par effet, dans `CODE[0xA8A3 + effet]` (`0x939F`, `0x9
 | Base | Borne de | Valeur famille A | Valeur famille B |
 | --- | --- | --- | --- |
 | `0xA8A3` | `0x011C` (couleur) | 7 | 4 |
-| `0xA8BC` | *(troisième paramètre)* | 4 | — |
-| `0xA8D5` | `0x0D19` (vitesse) | 9 | 9 |
+| `0xA8BC` | `0x0D9D` (vitesse) | 4 | — |
+| `0xA8D5` | `0x0D19` (luminosité) | 9 | 9 |
 
-Les deux affectations extrêmes sont vérifiées par désassemblage direct (`0x8C34` pour `0xA8D5`,
-`0x939F` pour `0xA8A3`). Celle du milieu ne l'est pas.
+Les trois affectations sont vérifiées par désassemblage direct : `0x8C34` pour `0xA8D5`,
+`0x939F` pour `0xA8A3`, `0x15EB` / `0x8EF4` / `0x8F0B` pour `0xA8BC`.
 
 ##### L'enregistrement se relit entièrement
 
@@ -1399,10 +1483,10 @@ Pour l'effet courant du clavier dumpé (index 4, offset 64, octets `09 37`) :
 
 | Bits | Valeur | Sens |
 | --- | --- | --- |
-| `b0[4:0]` | 9 | **vitesse**, au maximum |
+| `b0[4:0]` | 9 | **luminosité**, au maximum |
 | `b0[7]` | 0 | drapeau `0x24.3` |
 | `b1[3:0]` | 7 | **couleur** = arc-en-ciel |
-| `b1[6:4]` | 3 | non lu par les masques identifiés — candidat pour le paramètre borné à 4 |
+| `b1[6:4]` | 3 | non lu par les masques identifiés — **non attribué** |
 | `b1[7]` | 0 | drapeau (masque `0x8F`) |
 
 #### Et `5A A5`
