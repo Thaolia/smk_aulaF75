@@ -1847,6 +1847,75 @@ if (++counter > 99) {
 Les handlers se **chaînent** en réécrivant `0x0D9E` (`0x3CCE`, `0x3CD4`) et le remettent à zéro en
 fin de service (`0x393E`) : une requête déclenche une rafale de réponses, une par tic.
 
+#### L'opcode `0x43` — un second niveau de dispatch, et ce que valent les 518 octets
+
+Le handler 4 n'émet pas directement : il **redispatche** sur `XRAM 0x038D`, le sous-index que
+`euart0_parse` a extrait du quartet haut de l'octet 5 de la requête.
+
+```asm
+0x3AB5  movx a, [0x038D] ; mov r7, a
+0x3ABA  cjne a, #0x08, +3 ; jnc sortie      ; rejette >= 8
+0x3ABF  mov dptr, #0x3AC6 ; a = a*3 ; jmp @a+dptr
+```
+
+Huit entrées en `0x3AC6`, chacune posant le poids fort du pointeur de charge :
+
+| `0x038D` | Base | Page |
+| --- | --- | --- |
+| 0 | `0xDC00` | 110 |
+| 1 | `0xDE00` | 111 |
+| 2 | `0xE000` | 112 |
+| 3 | `0xE200` | 113 |
+| 4 | `0xE400` | 114 |
+| 5 | `0xE600` | 115 |
+| 6 | `0xE800` | 116 |
+| 7 | `0xEA00` | 117 |
+
+**Ce sont exactement les pages de profil 2 à 9.** Leur disposition avait été établie ailleurs, à
+partir du `0xD800 + n × 512` de l'offset 0 du bloc de réglages — deux fonctions sans rapport qui
+donnent la même grille. Le pas de 512 octets et la borne haute `0xEA00` (= profil 9) coïncident.
+
+L'opcode `0x43` est donc **la relecture d'un profil de remap**, le sous-index choisissant lequel.
+
+##### Les 518 octets n'existent pas
+
+L'accès est **aléatoire, pas séquentiel** : le pointeur est recalculé à chaque requête depuis la
+base, et non avancé.
+
+```asm
+a = [0x0D14] ; B = 14 ; mul ab        ; offset = sequence x 14
+[0x013A] += offset_lo ; [0x0139] += offset_hi     ; pointeur = base + sequence x 14
+```
+
+Et la réponse renvoie à l'hôte de quoi piloter la boucle :
+
+```asm
+IDATA[0x37] = [0x02E2]    ; nombre total de blocs
+IDATA[0x38] = [0x0D14]    ; numero du bloc courant
+```
+
+Le compte `[0x02E2]` est donc un **plafond de boucle**, pas une taille. Et il se lit :
+
+| Opcode | Blocs | × 14 | Division | Taille réelle de la région |
+| --- | --- | --- | --- | --- |
+| `0x41` | 36 | 504 | exacte | **504 o** |
+| `0x42` | 27 | 378 | exacte | **378 o** |
+| `0x43` | 37 | 518 | **reste 6** | **512 o** — `⌈512 / 14⌉ = 37` |
+| `0x44` | 10 | 140 | exacte | **140 o** |
+| `0x49` | 35 | 490 | exacte | **490 o** |
+
+**`0x43` est le seul dont le compte ne divise pas.** C'est précisément celui qui lit une page
+entière de 512 octets : 37 blocs de 14 la couvrent, le dernier dépassant de six octets que l'hôte
+ignore. Les quatre autres tombent juste, donc leurs régions font exactement 504, 378, 490 et
+140 octets — et non des pages.
+
+Ce qui corrige la lecture du commit précédent : je parlais de « 518 octets » comme d'une taille de
+région. C'est un **nombre de blocs arrondi au-dessus**, et la région fait 512.
+
+Au passage, cela renseigne aussi l'opcode `0x41` : sa région fait **504 octets pile**, pas une page.
+Huit octets de moins qu'une page de 512 — réservés à autre chose, ou simplement hors du champ
+relu.
+
 #### Ce que la charge contient
 
 Le pointeur de charge vit dans `XRAM 0x0139:0x013A` et reçoit `0xD000`, `0xD400` ou `0xD800` selon
