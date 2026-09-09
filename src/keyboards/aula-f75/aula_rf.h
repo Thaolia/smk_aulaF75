@@ -53,22 +53,29 @@ rf_link_t rf_link(void);
 bool      rf_is_wireless(void);
 
 /*
- * « Une trame d'état valide est arrivée depuis le dernier changement de mode. »
- * Ce n'est PAS le drapeau de connexion du firmware d'usine : le champ qui le
- * porte n'a pas été isolé dans `euart0_parse`. Pas de péremption non plus,
- * faute de base de temps — l'indication ne retombe pas toute seule.
+ * « Le module a répondu à une sonde récente. »
+ *
+ * Ce n'est PAS le drapeau de connexion du firmware d'usine : le champ de la
+ * trame d'état qui porte l'appairage n'a pas été isolé dans `euart0_parse`. Ce
+ * qui est transcrit, c'est sa sonde de présence (`fcn.00003901`, commande 0x06
+ * toutes les cent itérations, trois échecs et la liaison est déclarée morte) —
+ * donc l'indication retombe, mais elle dit « la radio répond », pas « un hôte
+ * est apparié ».
+ *
+ * `rf_task()` la recopie dans `keyboard_state.connected`.
  */
 bool rf_connected(void);
 
 uint8_t rf_bt_slot(void);
 void    rf_set_bt_slot(uint8_t slot);
 
-/* Réaffirme le lien courant avec le drapeau « appairage » de la commande 0x01. */
+/*
+ * Réaffirme le lien courant avec le drapeau « appairage » de la commande 0x01.
+ * Le firmware d'usine fait la même chose depuis son tic lent quand le raccourci
+ * d'appairage a posé le bit 0x2C.5 (`fcn.0000870C`).
+ */
 void rf_request_pairing(void);
 
 void rf_send_report(__xdata report_keyboard_t *report);
 void rf_send_nkro(__xdata report_nkro_t *report);
 void rf_send_extra(__xdata report_extra_t *report);
-
-void rf_query_status(void);
-void rf_send_battery(uint8_t percent);

@@ -69,9 +69,9 @@ n'en peuple que 15. C'est bien **15** colonnes physiques.
 | Correspondance canal ↔ (ligne, couleur) | ✅ **établie via le driver OpenRGB** |
 | Câblage du rendu dans la boucle SMK | ❌ inadéquation d'architecture, voir ci-dessous |
 | Rotation d'encodeur | ❌ non implémentée (phases identifiées : `P0.5` / `P0.6`) |
-| Broches au rôle inconnu | ❓ `P0.0` `P0.1` `P4.1` `P4.4` `P4.5` `P4.7` `P5.5` `P5.6` `P7.4` `P7.7` |
+| Broches au rôle inconnu | ❓ `P0.0` `P0.1` `P4.1` `P4.4` `P5.5` `P5.6` `P7.7` — `P7.4`/`P4.5` sont le sélecteur de connexion, `P4.7` la ligne « module prêt » |
 | Veille | ✅ **implémentée** — transcrite du firmware d'usine, non testée sur matériel |
-| Sans-fil | ❌ hors périmètre, voir ci-dessous |
+| Sans-fil 2,4 GHz / Bluetooth | ⚠️ **écrit et compilé** (`aula_rf.c`, EUART0), **jamais exécuté** — voir ci-dessous |
 
 ## Matrice : 81 touches, pas 80 — l'encodeur
 
@@ -1230,7 +1230,7 @@ recoupé par un scan octet à octet de tous les opcodes 8051 à opérande direct
 | `0xA544` | **ISR EUART0** (vecteur `0x6B`) | SCON.RI/TI, SBUF, SCON |
 | `0xAB0F` | émetteur générique, longueur variable | SBUF |
 | `0xACE6` | émetteur de trame courte (6 o) | SBUF |
-| `0xEF40` | `orl IEN1,#0x40` — réarme l'IRQ (2 appels depuis `0x84E9`) | IEN1 |
+| `0xEF40` | **entrée en sans-fil** : `orl IEN1,#0x40` **puis `anl USBCON,#0x7F`**, `setb 0x27.7`, `delay(20)` (2 appels depuis `0x84E9`) | IEN1, **USBCON** |
 | `0xECC5` @ `0xEDE0` | priorité : `IPH1 = 0x42`, `IPL1 = 0x41` → bit 6 posé des deux côtés, **niveau 3** | IPH1, IPL1 |
 | `0x7D74`, `0x9E39` | veille : coupent EUART0, rappellent `0xB1C2` au réveil | SCON, IEN1 |
 | `0x84E9` @ `0x8548` | coupe EUART0 | IEN1 |
@@ -1714,13 +1714,13 @@ sept : `P0.0`, `P0.1`, `P0.5`, `P0.6`, `P4.1`, `P4.4`, `P7.7`.
 /* 2,4 GHz */
 if (g_transport == 0) { setb 0x27.7; delay(20); }   /* 0xEF8D */
 g_transport = 1;
-IEN1 |= 0x40;                                       /* 0xEF40 */
+IEN1 |= 0x40; USBCON &= 0x7F; setb 0x27.7; delay(20);   /* 0xEF40 */
 rf_link_select(0, 0);                               /* <<< slot 0 */
 
 /* Bluetooth */
 g_transport = 2;
 if (g_bt_slot < 1 || g_bt_slot > 3) g_bt_slot = 1;
-IEN1 |= 0x40;
+IEN1 |= 0x40; USBCON &= 0x7F; setb 0x27.7; delay(20);
 rf_link_select(g_bt_slot, 0);
 
 /* filaire */
@@ -1734,6 +1734,54 @@ delay(200);
 
 `fcn.0000EED1` est la politesse de sortie : **commande `0x0E`**, dix millisecondes, **commande
 `0x0B` avec le paramètre 0**, dix millisecondes.
+
+##### Les deux temporisateurs de bascule — et l'USB qu'on éteint
+
+Une première rédaction de cette page donnait `0xEF40` pour un simple réarmement d'IRQ. C'est faux,
+et la différence compte pour un portage. Les deux thunks, désassemblés en entier :
+
+```asm
+0xEF8D  setb 0x3f           ; = 0x27.7
+        mov  r7,#0x14
+        ljmp 0xED03         ; ~20 ms
+
+0xEF40  orl  IEN1,#0x40     ; l'IRQ EUART0 s'arme
+        anl  USBCON,#0x7F   ; <<< le module USB s'ETEINT
+        setb 0x3f
+        mov  r7,#0x14
+        ljmp 0xED03         ; ~20 ms
+```
+
+`0xED03` est la boucle de temporisation (`r7` en entrée, deux niveaux imbriqués). `0x3f` est
+l'adresse *bit* de `0x27.7`, d'où la notation employée plus haut.
+
+Donc **en sans-fil, le firmware d'usine coupe le périphérique USB** ; il ne se contente pas
+d'ignorer l'hôte. Les trois raccourcis de changement de slot (`0x41D4`, `0x420A`, `0x423F`) le
+faisaient déjà en clair — la nouveauté est que le chemin du *sélecteur à glissière* le fait aussi,
+par ce thunk, et c'est celui-là que le portage suit.
+
+##### `fcn.00003901` : la commande `0x06` est une sonde de présence
+
+Relu en C, la branche de repos du séquenceur (documentée plus bas) n'est pas une requête d'état
+ponctuelle mais un **entretien de liaison à trois coups** :
+
+```c
+if (g_state == 0 && !flag_7_2) {
+    if (++[0x0150] > 99) {
+        [0x0150] = 0;
+        euart0_cmd06();                 /* commande 0x06 */
+        if (++IDATA[0x30] > 2) {        /* trois sondes sans reponse */
+            IDATA[0x30] = 0;
+            0x2C.1 = 0;                 /* « liaison vivante » retombe */
+            P0CR &= 0xFB; P0_2 = 1;     /* la ligne d'emission est relachee */
+        }
+    }
+}
+```
+
+Le relâchement de `P0.2` est exactement celui que l'ISR fait en fin de rafale : la sonde sert aussi
+de rattrapage si une rafale s'est perdue. C'est ce mécanisme que le portage transcrit pour donner un
+sens à son indicateur « connecté » — et c'est pourquoi cet indicateur **retombe** de lui-même.
 
 ##### `fcn.0000EF5A` → `fcn.0000ED89` — la commande qui choisit la radio
 
@@ -3806,24 +3854,40 @@ du BK3632 lui-même.
 *(Les fils elektroda cités ici sont inaccessibles depuis cet environnement — timeouts systématiques,
 probablement un filtrage des IP datacenter. À lire depuis un navigateur.)*
 
-### Pourquoi ce n'est pas livrable
+### Ce qui est porté, et ce qui ne l'est pas
 
-1. La **sémantique des commandes** n'est pas établie : on a les codes, pas leur signification.
-2. Les **réponses du BK3632** ne sont pas analysées (buffer RX, drapeau `0x24.4`).
-3. L'appairage et la gestion de lien sont hors de portée sans capture du trafic réel.
-4. `src/platform/bk3632/rf_controller.c` de SMK suppose le **SPI bit-bangé** de l'Air60. Il
-   faudrait lui écrire un transport EUART0 complet.
-5. Rien de tout cela ne se valide sans **flasher et itérer sur le matériel**.
+Les cinq objections qui figuraient ici ont été levées une à une par le travail ci-dessus : les
+codes de commande ont leur sémantique, la trame d'état reçue est décodée, l'entrée en mode est
+tranchée (sélecteur `P7.4`/`P4.5`, commande `0x01`). Reste la cinquième, qui ne se lève pas au
+désassemblage : **rien n'a été flashé, donc rien n'a été exécuté.**
 
-Le transport est donc documenté pour qui voudra le reprendre, mais **le sans-fil reste hors
-périmètre de ce portage**.
+`src/platform/bk3632/rf_controller.c` de SMK suppose le SPI bit-bangé de l'Air60 et n'est pas
+réutilisable ici ; le transport EUART0 a donc été écrit à part. `meson.build` déclare
+`'wireless': 'euart0'` pour ce clavier, ce qui ajoute `-DRF_EUART0=1` et refuse tout
+`debug_sink` autre que `console` — l'EUART0 n'a qu'un seul maître.
 
-## Pourquoi le sans-fil est hors périmètre
+| Fichier | Contenu |
+| --- | --- |
+| `src/keyboards/aula-f75/aula_rf.c` | le pilote : ISR, trames, somme de contrôle, machine à états du sélecteur, sonde de présence |
+| `src/keyboards/aula-f75/aula_rf.h` | l'API, avec les deux encodages de slot distingués (`rf_link_t` contre `rf_slot_t`, qui se croisent sur la valeur 0) |
+| `src/keyboards/aula-f75/kb.c` | aiguillage des rapports HID, et `LNK_BT1..3` sur `Fn`+`1/2/3` |
+| `src/platform/sh68f90/interrupts.h` | le vecteur `_INT_EUART0` revendiqué, avec une erreur de compilation si `DEBUG_SINK_UART` le réclame aussi |
 
-Le NuPhy Air60 parle à son BK3632 en **SPI bit-bangé** (`RF_BB_SPI_*`, `src/platform/bb_spi.c`).
-L'AULA F75 utilise **EUART0**. `src/platform/bk3632/rf_controller.c` n'est donc **pas réutilisable
-tel quel** : il faudrait lui écrire un transport EUART0. C'est pour cette raison que l'entrée
-`meson.build` ne déclare **pas** `'wireless': 'bk3632'`.
+Trois écarts assumés par rapport au firmware d'usine, chacun commenté sur place :
+
+1. **Le transport de départ est lu sur le sélecteur**, pas supposé filaire. Le firmware d'usine
+   part de `g_transport = 0` et laisse l'anti-rebond converger ; pendant ces dix tics les frappes
+   partiraient sur l'USB alors que la glissière dit « sans fil ».
+2. **La commande `0x01` est mise en file**, pas émise une fois pour toutes. Le firmware d'usine la
+   perd si `P4.7` est bas à cet instant précis ; `rf_task()` la rejoue dès que le module se
+   déclare prêt.
+3. **`usb_deinit()` remplace le seul `anl USBCON,#0x7F`** : même coupure du module, plus le
+   désarmement de l'interruption USB — sans quoi l'ISR de SMK continuerait à tourner sur un
+   périphérique éteint.
+
+Coût mesuré à la compilation (SDCC 4.5.0, zéro avertissement, `check_interrupts` OK) :
+**+251 o de flash**, **+4 o de XDATA**, **3 o de RAM interne** — la marge interne passe de 22 à
+19 octets, la pile reste à 222.
 
 ## EEPROM émulée en flash — l'IAP
 

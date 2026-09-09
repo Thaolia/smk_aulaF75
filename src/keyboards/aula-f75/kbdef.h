@@ -145,8 +145,17 @@
  * l'ISR bascule la direction d'une broche via P0CR puis P0.2.
  *
  * Conséquence : src/platform/bk3632/rf_controller.c n'est PAS réutilisable tel
- * quel pour ce clavier. Il faudrait un transport EUART0. Le sans-fil est donc
- * hors périmètre de ce portage ; ne pas déclarer 'wireless' dans meson.build.
+ * quel pour ce clavier. Le transport EUART0 a donc été écrit à part, dans
+ * aula_rf.c, et meson.build déclare 'wireless': 'euart0' pour ce clavier.
+ *
+ * Sélecteur de connexion, trois positions (établi par fcn.000084E9) :
+ *   P7.4 = 0            -> 2,4 GHz (dongle)
+ *   P7.4 = 1, P4.5 = 1  -> filaire USB
+ *   P7.4 = 1, P4.5 = 0  -> Bluetooth, slot choisi par LNK_BT1..3
+ * P4.7 est la ligne « module prêt » : aucune trame ne part quand elle est basse.
+ *
+ * AVERTISSEMENT : ce pilote est transcrit du désassemblage et n'a JAMAIS été
+ * exécuté -- rien n'a été flashé sur l'appareil.
  * ------------------------------------------------------------------------- */
 
 enum custom_keycodes {
@@ -156,6 +165,17 @@ enum custom_keycodes {
     BRI_DN,               /* luminosité - */
     SPD_UP,               /* vitesse + */
     SPD_DN,               /* vitesse - */
+
+    /*
+     * Emplacements Bluetooth. Le transport lui-même vient de la glissière, pas
+     * d'une touche : ces trois-là ne choisissent QUE le slot, comme la commande
+     * 0x01 du firmware d'usine. Un appui sur le slot déjà actif relance
+     * l'appairage -- c'est ce que fait le firmware d'usine quand le bit 0x2C.5
+     * est posé (drapeau 1 de la commande 0x01, fcn.0000870C).
+     */
+    LNK_BT1,
+    LNK_BT2,
+    LNK_BT3,
 
     KB_SAFE_RANGE,
 };

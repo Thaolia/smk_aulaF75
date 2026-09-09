@@ -4,6 +4,7 @@
 #include "interrupts.h"
 #include "delay.h"
 #include "usb.h"
+#include "keyboard.h"
 #include <string.h>
 
 /*
@@ -64,15 +65,16 @@ _Static_assert(FREQ_SYS / 92 > 255000 && FREQ_SYS / 92 < 267000, "FREQ_SYS incom
 #define RF_CMD_REPORT_S 0x03 /* trame courte : 10 o de charge */
 #define RF_CMD_STATUS   0x06 /* requête d'état -> réponse 02 06 ... */
 #define RF_CMD_SETTINGS 0x0B /* un paramètre ; émis en quittant le sans-fil */
-#define RF_CMD_BATTERY  0x0D /* pourcentage de batterie */
 #define RF_CMD_WIRED    0x0E /* passage en filaire */
 
 /*
  * Non émises ici, mais relevées sur le firmware d'usine : 0x04 (un paramètre,
  * envoyé périodiquement avec la valeur 3), 0x08 (conteneur à sous-commandes :
- * batterie, réglages, relecture de la flash), 0x09 (nom Bluetooth, 32 o) et
- * 0x0C (deux paramètres, émis depuis la routine de veille). Elles demandent des
- * données que ce portage n'a pas encore.
+ * batterie, réglages, relecture de la flash), 0x09 (nom Bluetooth, 32 o), 0x0C
+ * (deux paramètres, émis depuis la routine de veille) et 0x0D (pourcentage de
+ * batterie). Elles demandent des données que ce portage n'a pas : SMK ne lit
+ * pas la tension de batterie sur ce clavier, et aucun nom Bluetooth n'est
+ * configurable ici.
  */
 
 /* Longueurs totales, somme de contrôle comprise. */
@@ -107,7 +109,35 @@ static volatile __bit          rx_ready;
 static __xdata rf_link_t link_state;
 static __xdata uint8_t   bt_slot;
 static __bit             link_connected;
-static __bit             pairing_pending;
+
+/*
+ * Commande 0x01 en attente. Le firmware d'usine l'émet une seule fois, au
+ * moment du changement de transport, et la perd si `P4.7` est bas à cet
+ * instant-là (son prologue d'émission refuse alors la trame sans rien
+ * réessayer). On garde l'intention à la place, et `rf_task()` la rejoue dès que
+ * le module se déclare prêt : c'est le seul endroit où ce portage s'écarte du
+ * firmware d'usine pour corriger un trou, et il est sans effet quand le module
+ * répond tout de suite.
+ */
+static __bit           link_tx_pending;
+static __xdata uint8_t link_tx_flag;
+
+/*
+ * Sonde de présence, transcrite de `fcn.00003901` : la commande 0x06 part tous
+ * les cent passages et, au bout de TROIS sondes sans réponse, le firmware
+ * d'usine relâche la ligne d'émission (`P0CR &= 0xFB ; P0.2 = 1`) et retombe le
+ * bit 0x2C.1 — son drapeau « liaison vivante ».
+ *
+ * Son compteur tourne sur la cadence de `euart0_parse`, donc sur le trafic
+ * reçu ; ici il tourne sur les passages de `rf_task()`, dont la cadence n'est
+ * pas calibrée. Le seuil est donc pris large, pour la même raison que
+ * l'anti-rebond du sélecteur.
+ */
+#define RF_PROBE_PERIOD 2000
+#define RF_PROBE_MISSES 3
+static __xdata uint16_t probe_ticks;
+static __xdata uint8_t  probe_misses;
+static __bit            probe_answered;
 
 /*
  * Compteurs d'anti-rebond du sélecteur, un par position (0x08BD/0x02DF/0x0960).
@@ -249,14 +279,15 @@ static rf_slot_t rf_link_slot(void)
     return (link_state == RF_LINK_BT) ? (rf_slot_t)bt_slot : RF_SLOT_24G;
 }
 
-void rf_query_status(void)
+static void rf_queue_link(uint8_t flag)
 {
-    (void)rf_send_short(RF_CMD_STATUS, 0, 0);
+    link_tx_pending = 1;
+    link_tx_flag    = flag;
 }
 
-void rf_send_battery(uint8_t percent)
+static bool rf_send_status_probe(void)
 {
-    (void)rf_send_short(RF_CMD_BATTERY, percent, 0);
+    return rf_send_short(RF_CMD_STATUS, 0, 0);
 }
 
 /* ------------------------------------------------------- trames de frappe */
@@ -335,6 +366,7 @@ static void rf_rx_consume(void)
          */
         if (rx_buf[0] == 0x02) {
             link_connected = 1;
+            probe_answered = 1;
         }
     }
 
@@ -393,13 +425,34 @@ static void rf_tx_drain(void)
     }
 }
 
-static void rf_irq_enable(bool on)
+/*
+ * Armement de la radio, transcrit du thunk d'usine 0xEF40 — quatre
+ * instructions, appelé par `fcn.000084E9` en 0x8581 et 0x85D5 :
+ *
+ *   ef40  ORL  IEN1,#0x40      IEN1 |= _ES0      -- l'IRQ EUART0 s'arme
+ *   ef43  ANL  USBCON,#0x7F    USBCON &= ~_ENUSB -- le module USB s'ÉTEINT
+ *   ef46  SETB 0x3f            drapeau interne partagé, hors sujet ici
+ *   ef48  MOV  R7,#0x14
+ *   ef4a  LJMP 0xED03          ~20 ms
+ *
+ * La deuxième instruction manquait à une première rédaction de ce fichier : en
+ * sans-fil le firmware d'usine COUPE le périphérique USB, il ne se contente pas
+ * d'ignorer l'hôte. `usb_deinit()` fait la même coupure — `usb_hw_deinit()`
+ * retombe `_ENUSB | _SW1CON | _SW2CON` — et désarme en plus l'interruption USB,
+ * ce qui sur SMK est nécessaire : son ISR continuerait sinon à tourner sur un
+ * module éteint.
+ */
+static void rf_radio_on(void)
 {
-    if (on) {
-        IEN1 |= _ES0;
-    } else {
-        IEN1 &= (uint8_t)~_ES0;
-    }
+    IEN1 |= _ES0;
+    usb_deinit();
+    delay_ms(20);
+}
+
+static void rf_radio_off(void)
+{
+    rf_tx_drain();
+    IEN1 &= (uint8_t)~_ES0;
 }
 
 /*
@@ -415,8 +468,8 @@ static void rf_enter_24g(void)
     }
     link_state     = RF_LINK_24G;
     link_connected = 0;
-    rf_irq_enable(true);
-    (void)rf_send_link(RF_SLOT_24G, RF_LINK_SELECT);
+    rf_radio_on();
+    rf_queue_link(RF_LINK_SELECT);
 }
 
 static void rf_enter_bt(void)
@@ -429,8 +482,8 @@ static void rf_enter_bt(void)
         bt_slot = RF_SLOT_BT1; /* borne d'usine : 1..3 */
     }
     link_connected = 0;
-    rf_irq_enable(true);
-    (void)rf_send_link((rf_slot_t)bt_slot, RF_LINK_SELECT);
+    rf_radio_on();
+    rf_queue_link(RF_LINK_SELECT);
 }
 
 /*
@@ -446,10 +499,10 @@ static void rf_enter_wired(void)
     (void)rf_send_short(RF_CMD_SETTINGS, 0, 0);
     delay_ms(10);
 
-    link_state     = RF_LINK_WIRED;
-    link_connected = 0;
-    rf_tx_drain();
-    rf_irq_enable(false);
+    link_state      = RF_LINK_WIRED;
+    link_connected  = 0;
+    link_tx_pending = 0;
+    rf_radio_off();
     usb_init();
     /*
      * 200 ms bloquants, comme le firmware d'usine. `delay_us` donne un coup de
@@ -471,6 +524,14 @@ static void rf_enter_wired(void)
  * `fcn.000084E9` ; 0xF8 est P7 et 0xB0 est P4 d'après `sh68f90.h`. Elles
  * figuraient jusqu'ici parmi les entrées « rôle inconnu » du portage.
  */
+static rf_link_t rf_read_selector(void)
+{
+    if (!P7_4) {
+        return RF_LINK_24G;
+    }
+    return P4_5 ? RF_LINK_WIRED : RF_LINK_BT;
+}
+
 static void rf_sample_selector(void)
 {
     if (P7_4) {
@@ -514,11 +575,69 @@ void rf_init(void)
     link_state      = RF_LINK_WIRED;
     bt_slot         = RF_SLOT_BT1;
     link_connected  = 0;
-    pairing_pending = 0;
+    link_tx_pending = 0;
+    probe_ticks     = 0;
+    probe_misses    = 0;
+    probe_answered  = 0;
     deb_wired = deb_24g = deb_bt = 0;
 
     rf_uart_init();
-    rf_irq_enable(false); /* armée seulement quand un mode sans-fil est actif */
+    IEN1 &= (uint8_t)~_ES0; /* armée seulement quand un mode sans-fil est actif */
+
+    /*
+     * Le transport de départ est LU SUR LE SÉLECTEUR, pas supposé filaire.
+     *
+     * Le firmware d'usine fait autrement : il part de `g_transport = 0` et
+     * laisse l'anti-rebond de `fcn.000084E9` converger. Ce portage ne reproduit
+     * pas ce comportement, parce que pendant la convergence `kb_send_report()`
+     * pousserait les frappes sur l'USB alors que la glissière dit « sans fil ».
+     * Le sélecteur est la seule autorité sur le transport : autant l'interroger
+     * tout de suite.
+     *
+     * L'ordre de `main()` le permet : `rf_init()` est appelée par `kb_init()`,
+     * donc après `usb_init()` et avant `usb_wait_for_enumeration()`. Couper
+     * l'USB ici ne bloque rien — cette attente rend la main au bout de 500 ms
+     * (`ENUM_NO_HOST_MS`) quand aucun SETUP n'arrive.
+     */
+    switch (rf_read_selector()) {
+        case RF_LINK_24G:
+            rf_enter_24g();
+            break;
+        case RF_LINK_BT:
+            rf_enter_bt();
+            break;
+        case RF_LINK_WIRED:
+        default:
+            break;
+    }
+}
+
+/*
+ * Sonde de présence : commande 0x06 périodique, trois échecs et la liaison est
+ * déclarée morte. Transcrit de `fcn.00003901` ; voir RF_PROBE_PERIOD.
+ */
+static void rf_probe_task(void)
+{
+    if (++probe_ticks < RF_PROBE_PERIOD) {
+        return;
+    }
+    probe_ticks = 0;
+
+    if (probe_answered) {
+        probe_misses = 0;
+    } else if (probe_misses < RF_PROBE_MISSES) {
+        probe_misses++;
+    }
+
+    if (probe_misses >= RF_PROBE_MISSES) {
+        probe_misses   = 0;
+        link_connected = 0;
+        /* Le firmware d'usine relâche ici la ligne d'émission (0x3D5A). */
+        rf_tx_drain();
+    }
+
+    probe_answered = 0;
+    (void)rf_send_status_probe();
 }
 
 void rf_task(void)
@@ -526,10 +645,21 @@ void rf_task(void)
     rf_rx_consume();
     rf_sample_selector();
 
-    if (pairing_pending && rf_can_send()) {
-        pairing_pending = 0;
-        (void)rf_send_link(rf_link_slot(), RF_LINK_PAIRING);
+    if (rf_is_wireless()) {
+        if (link_tx_pending && rf_can_send()) {
+            link_tx_pending = 0;
+            (void)rf_send_link(rf_link_slot(), link_tx_flag);
+        }
+        rf_probe_task();
     }
+
+    /*
+     * `paired` n'est pas alimenté : aucun champ de la trame d'état n'a été
+     * identifié comme portant l'appairage, et le déduire de `connected` serait
+     * une invention. `keyboard.c` le laisse à zéro.
+     */
+    keyboard_state.rf_link   = (uint8_t)rf_link();
+    keyboard_state.connected = rf_connected() ? 1 : 0;
 }
 
 rf_link_t rf_link(void)
@@ -559,13 +689,14 @@ void rf_set_bt_slot(uint8_t slot)
     }
     bt_slot = slot;
     if (link_state == RF_LINK_BT) {
-        (void)rf_send_link((rf_slot_t)slot, RF_LINK_SELECT);
+        link_connected = 0;
+        rf_queue_link(RF_LINK_SELECT);
     }
 }
 
 void rf_request_pairing(void)
 {
     if (rf_is_wireless()) {
-        pairing_pending = 1;
+        rf_queue_link(RF_LINK_PAIRING);
     }
 }
