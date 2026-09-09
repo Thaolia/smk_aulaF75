@@ -1847,12 +1847,72 @@ ordinaires (`0x01`–`0x0E`).
 réinitialisation qui remplit une zone de `0xFF`, écrit `[0x0C44] = 2` et efface aussi `0x26.7`.
 
 **Aucune instruction de bit ne le teste.** Les seules lectures de l'octet `0x2C` sont trois
-`orl a, 0x2c` dans `fcn.00007928` — un OR qui fusionne les huit bits, donc au mieux un test
-« au moins un drapeau posé », jamais spécifique au bit 3.
+`orl a, 0x2c` en `0x7AD0`, `0x7AEE` et `0x7BF1` — un OR qui fusionne les huit bits, donc au mieux
+un test « au moins un drapeau posé », jamais spécifique au bit 3.
 
 > Soit ce drapeau est vestigial, soit il ne sert qu'à cette agrégation. Je le signale sans
 > trancher : c'est le genre de détail qui a l'air anodin et qui explique un comportement trois
 > mois plus tard.
+
+### `fcn.00007928` — le décodeur de l'encodeur rotatif
+
+Appelée depuis `isr_pwm4` (`0x8284`), donc échantillonnée à chaque tic.
+
+```c
+DAT_EXTMEM_0F6D = (P0 >> 5) & 3;          /* deux bits : P0.5 et P0.6 */
+if (0x0F6D == 0x0F6C) return;              /* pas de changement */
+hist = (nouveau & 3) | (hist << 2) & 0x3C; /* trois etats de deux bits */
+if (hist == 0x0B || hist == 0x34)  ... un sens ...
+if (hist == 0x38 || hist == 0x07)  ... l'autre ...
+0x0F6C = 0x0F6D;                           /* memorise */
+```
+
+C'est un **décodeur en quadrature** classique : deux bits, un historique glissant de six bits, et
+quatre motifs de transition reconnus — `0x0B` / `0x34` dans un sens, `0x07` / `0x38` dans l'autre.
+
+> **Ajout au brochage.** L'encodeur est sur **`P0.5`** et **`P0.6`**. Ces deux broches ne
+> figuraient nulle part dans la carte établie jusqu'ici, qui ne mentionnait de `P0` que le `P0.2`
+> du handshake EUART0. Aucun conflit : les lignes, colonnes, PWM et l'UART sont ailleurs.
+
+#### Deux comportements, choisis par l'offset 26 du bloc de réglages
+
+```asm
+mov dptr, #0x0327 ; movx a, @dptr ; jnz  <voie luminosite>
+```
+
+**`XRAM 0x0327` ≠ 0 → luminosité RGB.** Incrémente ou décrémente `g_rgb_brightness`, bornée à 9,
+puis persiste par exactement le même aiguillage que la classe d'action 3 : tableau par effet
+(`0x0345 + effet × 2`, masque `0x80` préservé), `0x0362 + effet`, ou la copie globale.
+
+**`XRAM 0x0327` = 0 → volume.** C'est la valeur du dump, donc le comportement d'usine :
+
+```asm
+jnb 0x25.6, fin                 ; pas d'evenement en attente
+clr 0x25.6
+mov dptr, #0x09BD
+jnb 0x25.7, +3 ; a = 0xE9       ; sens 1
+               a = 0xEA         ; sens 2
+movx [0x09BD] = a ; [0x09BE] = 0
+setb 0x2A.0
+```
+
+`0xE9` et `0xEA` sont les usages **Consumer volume + et volume −**. Et `0x2A.0` est précisément le
+drapeau du premier maillon de la chaîne de rapports HID, dont le tampon est **`0x09BC`** et la
+longueur **3** dans la table `0x6045`.
+
+Tout se recoupe : `0x09BC` porte le Report ID 2, `0x09BD:0x09BE` l'usage Consumer sur seize bits,
+soit trois octets — la longueur annoncée. La lecture de la table des longueurs faite bien plus tôt
+se confirme ici par un chemin complètement différent.
+
+> **Donc, sur cet exemplaire, la molette règle le volume**, et un réglage persistant (offset 26 du
+> bloc) la bascule sur la luminosité du rétroéclairage.
+
+`IDATA 0x6F` sert de compteur de répétition, comparé à 10 — la gestion de l'auto-répétition quand
+on tourne vite.
+
+> *Correction :* j'avais situé les trois `orl a, 0x2c` dans `fcn.00007928`. Ghidra donne
+> `body_end = 0x7AAC` pour cette fonction ; les trois occurrences (`0x7AD0`, `0x7AEE`, `0x7BF1`)
+> sont donc dans la ou les fonctions suivantes, que je n'ai pas ouvertes.
 
 ### Ce qui reste ouvert sur EUART0
 
