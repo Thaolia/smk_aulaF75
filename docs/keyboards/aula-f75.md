@@ -832,6 +832,119 @@ fcn.000005EA                     IDATA 0x54 (23 o) -> XDATA 0x0120
 
 Le parseur ne tourne donc **pas** dans la boucle principale mais dans l'**ISR TIMER2**.
 
+### Le raccord EUART0 ↔ pile HID
+
+Les rapports partent vers **deux destinations exclusives**, et l'aiguillage tient en un bit.
+
+```
+evenement touche
+  |
+  +-- fcn.00003108  /  fcn.000068E8       les deux ordonnanceurs
+        |
+        +-- fcn.000044F6 --> euart0.send  --------------------> RADIO
+        |     gardes : 0x2A.4, 0x27.0, 0x2A.6, puis P4.7
+        |
+        +-- fcn.0000EF7B
+              jb 0x2D.4, ret              <== l'interrupteur
+              lcall fcn.0000AA79
+              lcall fcn.00006ACF --> 0x6C07 --> EP2_IN_BUF ----> USB
+```
+
+Dans `fcn.000068E8`, les deux appels se suivent : `lcall fcn.000044F6` en `0x69C2`, puis
+`lcall fcn.0000EF7B` en `0x69C7`. Chaque voie porte sa propre garde ; ce n'est pas un `if/else`
+mais deux chemins gardés indépendamment.
+
+#### `0x2D.4` — le bit qui coupe l'USB
+
+`fcn.0000EF7B` tient en dix octets :
+
+```asm
+jb    0x2d.4, ret        ; radio active -> aucun rapport USB
+lcall fcn.0000aa79
+lcall fcn.00006acf       ; dispatcher HID -> USB
+```
+
+Neuf autres fonctions le lisent (`0x0F77`, `0x1632`, `0x1F14`, `0x1F5B`, `0x1FF7`, `0x5995`,
+`0x68EC`, `0x9A82`). Il n'est écrit **que dans `fcn.00001DC3`** : `setb` en `0x1F25`, `clr` en
+`0x1EF5` et `0x1F50`. Un seul propriétaire pour l'état, ce qui en fait le point d'observation
+naturel du mode de sortie.
+
+#### La voie USB : `fcn.00006ACF` → `0x6C07`
+
+`fcn.00006ACF` balaie les drapeaux de rapport en attente par priorité décroissante (`0x27.4`,
+`0x2A.6`, `0x29.0`, …). Pour chacun il pose trois choses puis saute en `0x6C07` :
+
+| XRAM | Rôle |
+| --- | --- |
+| `0x0F0C` | index du rapport |
+| `0x0F0F`–`0x0F11` | pointeur générique vers le tampon source |
+| tampon`[0]` | **Report ID** = `0x0F0C` + 1 |
+
+`0x6C07` fait le reste :
+
+```asm
+movx [0x0f49] = 0x11 ; [0x0f4a] = 0x80    ; destination = 0x1180
+movx [0x0f0b] = 0                          ; compteur
+boucle:
+  a = [0x0f0c] ; mov dptr,#0x6045 ; movc a,@a+dptr   ; longueur du rapport
+  ...copie octet a octet du pointeur generique vers 0x1180 + i...
+mov  IEP2CNT, a        ; SFR 0x9D
+orl  EP2CON, #0x04     ; SFR 0x9A  -> arme l'endpoint
+```
+
+**`0x1180` est `EP2_IN_BUF`** (`_SBUF(0x1180) EP2_IN_BUF[64]` dans l'en-tête SMK). `0x6C07` est
+donc purement USB : il ne contient aucune branche radio.
+
+La table `0x6045` donne la longueur totale par rapport :
+
+| index `0x0F0C` | 0 | 1 | 2 | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- | --- |
+| longueur | 3 | 2 | **4** | 16 | 8 | 8 |
+
+L'index 2 vaut 4 octets — ce qui recoupe exactement le rapport de `0xA4BD`, qui écrit `0x08BF`
+(Report ID 3) plus `0x08C0`–`0x08C2` : quatre octets, ni plus ni moins.
+
+#### La voie radio : `fcn.000044F6`
+
+Elle lit un index en `XRAM 0x0307`, adresse un enregistrement de **28 octets** en
+`0x0C57 + index × 28`, et émet deux tailles de trame :
+
+| Site | charge copiée | `r5` (trame) |
+| --- | --- | --- |
+| `0x46C2` | 28 o (`fcn.00004C4B`, `r7 = 0x1C`) | **30** |
+| `0x4730` | 11 o (`r7 = 0x0B`) | **13** |
+
+C'est la seule des cinq entrées de `euart0.send` qui soit appelée depuis la chaîne de rapport.
+Les quatre autres portent de la configuration, pas des frappes :
+
+| Appelant | Trame | Contenu |
+| --- | --- | --- |
+| `fcn.0000A307` @ `0xA376` | 32 o | commande `0x09`, nom Bluetooth |
+| `fcn.0000B093` @ `0xB0B8` | 23 o | commande `0x08`, charge de 19 o |
+| `fcn.0000ED3B` @ `0xED53` | 6 o | commande `0x06`, `01 06 00 00 00 <ck>` |
+
+> Précision à une note antérieure : dans `euart0.send`, **`r7` n'est pas l'octet de commande** —
+> il est rangé en IDATA `0x74` comme étiquette. L'octet de commande est l'octet 1 de la trame,
+> composé par l'appelant. `fcn.0000ED3B` le montre : `r7 = 0x0A` mais la trame porte `0x06`.
+
+#### `P4.7` — la seconde ligne de handshake, en entrée
+
+Toute émission est précédée de `jnb 0xb0.7, sortie` (SFR `0xB0` = `P4`). Onze sites le testent :
+`0x44F6`, `0xB093`, `0xB06A`, `0xB0BC`, `0xED3B`, `0xED89`, `0xEC85`, `0xEC68`, plus
+`isr.pwm0` (`0x743D`), `fcn.0000801F` (`0x8152`) et `fcn.0000AE50` (`0xAE5B`).
+
+**Aucun `setb` ni `clr` sur `0xB0.7` dans toute l'image** — le firmware ne l'écrit jamais. C'est
+donc une **entrée**, pilotée par le BK3632. Avec `P0.2` en sortie (requête d'émission), la
+liaison compte **deux lignes de handshake**, et `P4.7` n'apparaît dans aucune colonne de la
+matrice — cohérent.
+
+`fcn.0000B093` cumule les deux gardes, ce qui donne la forme canonique d'un émetteur :
+
+```asm
+jb  0x2c.1, ret     ; une emission est deja en cours
+jnb 0xb0.7, ret     ; le module radio n'est pas pret
+```
+
 ### Réception : parser et format des réponses
 
 La réception se fait en **deux étages**.
