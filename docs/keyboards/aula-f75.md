@@ -68,7 +68,7 @@ n'en peuple que 15. C'est bien **15** colonnes physiques.
 | Rendu RGB (permutation ligne/couleur) | ❌ les 18 broches PWM sont déclarées, mais `indicators.c` n'est pas porté |
 | Rotation d'encodeur | ❌ non implémentée (phases identifiées : `P0.5` / `P0.6`) |
 | Broches au rôle inconnu | ❓ `P0.0` `P0.1` `P4.1` `P4.4` `P4.5` `P4.7` `P5.5` `P5.6` `P7.4` `P7.7` |
-| Veille | ❌ désactivée volontairement (`USER_SLEEP_NONE`) |
+| Veille | ✅ **implémentée** — transcrite du firmware d'usine, non testée sur matériel |
 | Sans-fil | ❌ hors périmètre, voir ci-dessous |
 
 ## Matrice : 81 touches, pas 80 — l'encodeur
@@ -123,6 +123,63 @@ tant qu'un `indicators.c` propre n'est pas écrit.
 - Rapport cyclique **inversé** : 0 = éteint, 255 ≈ plein. Les LED sont donc à anode commune, le PWM
   fait office de sink.
 - `PWM00CON` d'usine = `0x89` (`0x68D3`) = `PWM_MODE_ENABLE | PWM_SS | diviseur 1`.
+
+## Veille — implémentée
+
+Transcrite de la séquence d'usine. Le mécanisme de réveil est : **toutes les colonnes tenues
+BASSES, toutes les lignes en entrée avec pull-up**. Un appui quelconque tire une ligne au 0, ce
+qui déclenche INT4.
+
+| Étape | Adresse d'usine |
+| --- | --- |
+| Parking du panneau (lignes entrée+pull-up, colonnes basses puis sorties) | `fcn @ 0x006E` |
+| Parking hors matrice : P0.0/0.1, P0.5/0.6, P7.4/7.7, P4.5 → sortie basse ; P0.7 haut ; P7.6 bas | `0x7DCB`-`0x7DF1` |
+| `EXF1 = 0` | `0x7DF4` |
+| `IENC = 0xF3` | `0x7DF6` |
+| `EXF0 = 0x40` | `0x7DF9` |
+| `IEN0 \|= 0x02` (EX4) | `0x7DFC` |
+| `PCON \|= 0x02` (power-down) | `0x7E34` |
+
+**`IENC = 0xF3` et `EXF0 = 0x40` sont exactement les valeurs que `platform/sh68f90/extint.c`
+documente** comme « transcrites du firmware d'usine » — confirmation indépendante sur cet appareil.
+`extint_wake_arm()` est donc réutilisable tel quel.
+
+`fcn @ 0x006E` est aussi une **quatrième confirmation du brochage** : il énumère littéralement les
+6 lignes (`P7CR`/`P7PCR` bits 0-3, `P5CR`/`P5PCR` bits 3-4) puis les 15 colonnes, dans l'ordre.
+
+⚠️ **Non testée sur matériel.** Un parking faux = un clavier qui ne se réveille pas.
+
+## Sans-fil — transport caractérisé, protocole non résolu
+
+### Ce qui est établi
+
+Liaison **EUART0** vers le BK3632, en **half-duplex** :
+
+| Élément | Valeur |
+| --- | --- |
+| Trame | **6 octets** (`mov r5,#0x06` @ `0xAB0B`) |
+| Octet 0 | `0x01` (tête constante) |
+| Octet 1 | code de commande — **`0x04`, `0x05`, `0x08`, `0x09`** observés |
+| Octets 2-5 | charge utile |
+| Broche de direction | **`P0.2`** — `clr P0.2` + `orl P0CR,#0x04` avant émission (`0xAB13`), relâchée en fin de trame par l'ISR (`anl P0CR,#0xFB` puis `setb P0.2`) |
+| Routine d'envoi | `fcn @ 0xAB08` (charge nulle) / `0xAB09` (charge dans A) → `0xAB0F` |
+| Buffers | TX en IDATA `0x33`, RX en IDATA `0x54` (23 o) |
+| Drapeau émission | `0x2C.1` |
+
+La commande `0x09` est émise depuis `main()` (`0x9148`, `0x914D`) — probablement l'initialisation
+du lien.
+
+### Pourquoi ce n'est pas livrable
+
+1. La **sémantique des commandes** n'est pas établie : on a les codes, pas leur signification.
+2. Les **réponses du BK3632** ne sont pas analysées (buffer RX, drapeau `0x24.4`).
+3. L'appairage et la gestion de lien sont hors de portée sans capture du trafic réel.
+4. `src/platform/bk3632/rf_controller.c` de SMK suppose le **SPI bit-bangé** de l'Air60. Il
+   faudrait lui écrire un transport EUART0 complet.
+5. Rien de tout cela ne se valide sans **flasher et itérer sur le matériel**.
+
+Le transport est donc documenté pour qui voudra le reprendre, mais **le sans-fil reste hors
+périmètre de ce portage**.
 
 ## Pourquoi le sans-fil est hors périmètre
 

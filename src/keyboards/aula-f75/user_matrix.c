@@ -9,11 +9,6 @@
  * Ordre de scan lu dans la table de saut du firmware d'usine @ 0x72F4.
  */
 
-#define KB_C_P4_MASK (uint8_t)(KB_C12_P4_0 | KB_C13_P4_2 | KB_C14_P4_3)
-#define KB_C_P5_MASK (uint8_t)(KB_C8_P5_0 | KB_C9_P5_1 | KB_C10_P5_2 | KB_C11_P5_7)
-#define KB_C_P6_MASK (uint8_t)(KB_C0_P6_0 | KB_C1_P6_1 | KB_C2_P6_2 | KB_C3_P6_3 | \
-                               KB_C4_P6_4 | KB_C5_P6_5 | KB_C6_P6_6 | KB_C7_P6_7)
-
 /* Les 18 sorties PWM du rétroéclairage : 6 lignes de LED x R/G/B */
 #define LED_P1_MASK (uint8_t)0x3f
 #define LED_P2_MASK (uint8_t)0x3f

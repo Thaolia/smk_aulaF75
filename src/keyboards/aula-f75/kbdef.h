@@ -105,6 +105,14 @@
 #define KB_C13 P4_2
 #define KB_C14 P4_3
 
+/* Masques par port, dérivés des broches ci-dessus */
+#define KB_C_P4_MASK (uint8_t)(KB_C12_P4_0 | KB_C13_P4_2 | KB_C14_P4_3)
+#define KB_C_P5_MASK (uint8_t)(KB_C8_P5_0 | KB_C9_P5_1 | KB_C10_P5_2 | KB_C11_P5_7)
+#define KB_C_P6_MASK (uint8_t)(KB_C0_P6_0 | KB_C1_P6_1 | KB_C2_P6_2 | KB_C3_P6_3 | \
+                               KB_C4_P6_4 | KB_C5_P6_5 | KB_C6_P6_6 | KB_C7_P6_7)
+#define KB_R_P5_MASK (uint8_t)(KB_R4_P5_3 | KB_R5_P5_4)
+#define KB_R_P7_MASK (uint8_t)(KB_R0_P7_0 | KB_R1_P7_1 | KB_R2_P7_2 | KB_R3_P7_3)
+
 /* Rétroéclairage : 18 sorties PWM = 6 lignes physiques de LED x R/G/B.
  * Confirmé par P1CR=P2CR=P3CR=0x3F (les 18 broches PWM en sortie).
  * Correspondance MCU déduite du NuPhy Air60 : PWM0x<->P3_x, PWM1x<->P2_x,
