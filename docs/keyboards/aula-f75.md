@@ -213,6 +213,49 @@ documente** comme « transcrites du firmware d'usine » — confirmation indépe
 
 ⚠️ **Non testée sur matériel.** Un parking faux = un clavier qui ne se réveille pas.
 
+## Le BK3632 — ce qu'on sait, et avec quel degré de certitude
+
+### Établi sur CET appareil (par désassemblage ou observation directe)
+
+- **Il est présent sur le PCB.** Identifié par le mainteneur de `sinowisp` sur les photos du PCB de
+  l'issue #96 : « another package variant for the **BK3632** ».
+- **Il porte tout le sans-fil.** C'est pourquoi le support OpenRGB est **filaire uniquement** : le
+  driver parle au SH68F90A, qui ne gère pas la radio.
+- **Il dialogue avec le 8051 par EUART0** — vecteur 13 (`_INT_EUART0`), `SCON` 0xD8 / `SBUF` 0xAA,
+  broches `P5.5` (TXD) et `P5.6` (RXD), trames `01 <cmd> <param> <len> …` de 6 à 32 octets à
+  **260 870 bauds, 8N1**.
+- **Il détient les noms Bluetooth.** La commande `0x09`, émise deux fois depuis `main()`, lui pousse
+  `"AULA-F75 3.0 KB "` et `"AULA-F75 5.0 KB "` depuis la flash du 8051 (`0xAF6D`).
+
+### Caractéristiques annoncées par le fabricant
+
+SoC sans fil 2,4 GHz, **Bluetooth 5.0 dual-mode + protocole propriétaire**, boîtier **QFN32**,
+**20 Ko de RAM**, **160 Ko de flash**, positionné pour les télécommandes, claviers et souris.
+
+⚠️ Ces chiffres proviennent d'un **résumé de moteur de recherche**, pas d'une fiche technique lue
+directement. La page produit Beken est rendue en JavaScript et n'a pas pu être extraite. À traiter
+comme indicatif.
+
+Le catalogue Beken confirme au moins les catégories : « Bluetooth LE SoCs », « Dual-mode Bluetooth
+SoCs », « Proprietary Chips », et une application dédiée « Wireless Keyboard & Mouse ».
+
+### Déduit du BK3432, son proche parent — **pas le même composant**
+
+Le SDK BK3432 (`Cdreamyao/tuya_ble_sdk_Demo_Project_bk3432`) donne, en source primaire :
+
+| | Valeur | Source |
+| --- | --- | --- |
+| Cœur | **ARM9E-S**, little endian, 60 MHz | `<Cpu>CPUTYPE(ARM9E)</Cpu>` du projet Keil |
+| Table de vecteurs | ARM classique : reset, undefined, swi, pabort, dabort, reserved, irq, fiq | `boot_vectors.s` |
+| Mapping | ROM `0x00000000`, RAM `0x00400000`, périphériques AHB `0x00800000+` | `BK3432_reg.h` |
+| Bootloader | **BIM**, avec téléchargement par UART | `bim_uart.h`, et le PDF du SDK |
+
+**C'est bien un ARM9, pas un Cortex-M** — la table de vecteurs à 8 entrées avec `FIQ` le prouve.
+Cela corrobore le « ARM9 » du résumé fabricant, mais pour le BK3432.
+
+**Conséquence pour un éventuel reverse** : ce n'est pas une cible 8051 de 61 Ko comme le SH68F90A,
+mais **160 Ko d'ARM9** — une architecture entièrement différente, avec son propre jeu d'outils.
+
 ## Sans-fil — transport caractérisé, protocole non résolu
 
 ### Ce qui est établi
