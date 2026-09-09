@@ -1875,17 +1875,51 @@ parallèles** indexés par le même compteur :
 | `0x0C45 + i` | valeur courante |
 | `0x0390 + i` | valeur souhaitée |
 
-Le motif « si l'état est posé et la valeur courante est nulle, recopier la valeur souhaitée » en
-fait une **file de transitions**, mais elle porte une table de sauts que le décompilateur n'arrive
-pas à normaliser (`Could not find normalized switch variable`), plus un chevauchement d'instructions
-signalé en `0x7E23`. Je ne la documente pas plus loin : le C n'est pas fiable ici, et il faudrait
-la reprendre au désassemblage.
+La boucle est bornée à **treize entrées** — la queue de la fonction le dit sans ambiguïté :
 
-> **Frontières de fonction : les deux outils divergent.** Ghidra donne à `0x7AAD` un corps de
-> `0x7AAD`–`0x7D73`, soit 711 octets. r2 découpe la même plage en deux — `fcn.00007AAD` (245 o) et
-> `fcn.00007C12` (354 o). Le découpage de r2 est le plus fin, et `0x7C12` a ses propres lecteurs
-> (`0x011C`, `0x08C3`). Aucun des deux outils n'est autorité sur les bornes ; c'est à vérifier au
-> cas par cas.
+```asm
+0x7C08  inc r4
+0x7C09  mov a, r4
+0x7C0A  xrl a, #0x0d      ; 13 entrees
+0x7C0C  jz  0x7C11
+0x7C0E  ljmp 0x7ABD       ; tour suivant
+0x7C11  ret
+```
+
+Le motif « si l'état est posé et la valeur courante est nulle, recopier la valeur souhaitée » en
+fait une **file de transitions** de treize créneaux, mais elle porte une table de sauts que le
+décompilateur n'arrive pas à normaliser (`Could not find normalized switch variable`), plus un
+chevauchement d'instructions signalé en `0x7E23`. Je ne la documente pas plus loin : le C n'est pas
+fiable ici, et il faudrait la reprendre au désassemblage.
+
+#### Frontières de fonction : les deux outils divergent, et r2 a raison
+
+Ghidra donne à `0x7AAD` un corps de `0x7AAD`–`0x7D73`, soit 711 octets. r2 découpe la même plage en
+deux : `fcn.00007AAD` (245 o utiles) et `fcn.00007C12` (354 o). **Le désassemblage tranche en
+faveur de r2** — il y a un `ret` en `0x7C11`, et `0x7C12` est la cible d'un `lcall`. Ce sont deux
+routines, pas une.
+
+Pourquoi Ghidra les fusionne : l'**unique** appelant de `0x7C12` est le site `0x1BA5`, et ce site
+n'appartient à **aucune fonction**. Le code y est atteint par saut long depuis une autre routine ;
+`fcn.0000131c`, la fonction la plus proche en amont, ne fait que **deux octets**. Sans appelant
+visible, `0x7C12` ressemble à la suite du corps précédent.
+
+```asm
+0x1B9B  mov dptr, #0x0300   ; compteur 16 bits
+0x1B9E  movx a, @dptr
+0x1B9F  subb a, r6
+0x1BA0  jnc  0x1BA5
+0x1BA2  ljmp 0x1DC2         ; seuil non atteint
+0x1BA5  lcall fcn.00007C12  ; seul appelant
+```
+
+> **Piège de lecture.** `axt @ 0x7c12` annonce « CALL XREF from `fcn.0000131c` @ +0x889 ». C'est un
+> **nommage par drapeau le plus proche**, pas une appartenance : `fcn.0000131c` mesure deux octets
+> et ne contient évidemment pas un site situé 2 185 octets plus loin. Conclure « `fcn.0000131c`
+> appelle `0x7C12` » serait faux. Vérifier la containment (`aflj` et comparer `offset`/`size`)
+> avant d'attribuer un appel à une fonction nommée.
+
+Aucun des deux outils n'est autorité sur les bornes. Ici c'est r2 ; ailleurs ce peut être l'inverse.
 
 
 ### `fcn.00007928` — le décodeur de l'encodeur rotatif
@@ -1944,9 +1978,10 @@ se confirme ici par un chemin complètement différent.
 `IDATA 0x6F` sert de compteur de répétition, comparé à 10 — la gestion de l'auto-répétition quand
 on tourne vite.
 
-> *Correction :* j'avais situé les trois `orl a, 0x2c` dans `fcn.00007928`. Ghidra donne
-> `body_end = 0x7AAC` pour cette fonction ; les trois occurrences (`0x7AD0`, `0x7AEE`, `0x7BF1`)
-> sont donc dans la ou les fonctions suivantes, que je n'ai pas ouvertes.
+> *Correction, refermée :* j'avais situé les trois `orl a, 0x2c` dans `fcn.00007928`, puis dans
+> « la ou les fonctions suivantes ». En réalité **ces trois instructions n'existent pas** : ce sont
+> des octets d'opérande lus à tort comme des opcodes. Voir *Un drapeau qui n'est jamais consulté*
+> et `fcn.00007AAD`, ci-dessus.
 
 ### Ce qui reste ouvert sur EUART0
 
