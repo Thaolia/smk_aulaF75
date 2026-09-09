@@ -22,6 +22,10 @@ parts = [
     ['nuphy-air60', 'sh68f90', ['default'], { 'vendor_id': '0x05ac', 'product_id': '0x024f', 'wireless': 'bk3632', 'led_rows': '5', 'led_cols': '16', 'led_cx2': '13', 'led_cy2': '4' }],
     ['eyooso-z11', 'sh68f90', ['default'], { 'vendor_id': '0x258a', 'product_id': '0x002a', 'led_rows': '5', 'led_cols': '14', 'led_cx2': '13', 'led_cy2': '4' }],
     ['genesis-thor-300', 'sh68f881', ['default'], { 'vendor_id': '0x258a', 'product_id': '0x001f', 'led_rows': '6', 'led_cols': '19', 'led_cx2': '17', 'led_cy2': '5' }],
+    # AULA F75 : VID/PID lus dans la flash d'usine (descripteur device @ 0x5FCE).
+    # Grille LED 6x15 etablie via OpenRGB (num_leds=90, index = col*6+row).
+    # Pas de 'wireless' : le BK3632 est relie par EUART0, pas par le SPI bit-bange de l'Air60.
+    ['aula-f75', 'sh68f90', ['default'], { 'vendor_id': '0x258a', 'product_id': '0x010c', 'led_rows': '6', 'led_cols': '15', 'led_cx2': '14', 'led_cy2': '5' }],
 ]
 
 # SMK
