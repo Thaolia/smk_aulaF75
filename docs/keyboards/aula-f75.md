@@ -214,6 +214,45 @@ Appelée depuis `main()` (`0x9197`) et depuis `fcn.000005EA`, la grosse fonction
 la copie se fait USB masqué parce que le chemin USB touche aussi `0x009D`. Le réglage par les
 touches et le réglage par l'hôte se disputent la même variable ; cette fonction arbitre.
 
+### Comment le firmware choisit un effet
+
+Chaîne complète, du réglage à l'application :
+
+```
+octet de config, quartet HAUT (4 bits)
+        |  swap a ; anl a,#0x0f          @ 0x07F8
+        v
+   XRAM 0x038D      sous-index d'effet, 0..15
+        |  add a,#0x20                   @ 0x0A77
+        v
+   XRAM 0x0E24      effet EN ATTENTE
+        |  setb 0x2C.7 ; lcall 0xAF99    @ 0x0A71, 0x0A7D
+        v
+   XRAM 0x009D      effet COURANT        (copie USB masqué)
+        |
+        v
+   tables 0xA8BC / 0xA8D5   ->  paramètres du mode
+```
+
+**Le sous-index tient sur un quartet**, extrait par `swap a ; anl a,#0x0f` : d'où **16 effets
+possibles**, décalés en **32..47** par le `+ 0x20`. Cela explique le `cjne a, #0x20` de
+`fcn.0000AF99` : ce n'est pas une valeur magique, c'est la **borne basse de la plage**.
+
+Trois chemins écrivent `0x0E24` :
+
+| Site | Rôle |
+| --- | --- |
+| `0x0A79` | **chemin utilisateur** — `0x038D + 32`, puis publication immédiate |
+| `0x9184` | **restauration au démarrage** — relit `0x009D` juste après `fn.fx_init` (`0xA283`), dans `main()` |
+| `0xA48B` | **chemin du tick** — teste `0x009D == 0x20` puis pose quatre drapeaux (`0x24.5`, `0x2A.5`, `0x24.1`, `0x27.7`) |
+
+`0x038D` est lu à 18 endroits et écrit à 3 (`0x02B3`, `0x034E`, `0x07FC`). Les lectures le comparent
+à `8` (`0x0B1F`), lui ajoutent `-2` (`0x0DB5`), ou le décrémentent — ce sont les navigations
+« effet suivant / précédent ».
+
+À côté, `0x038E` et `0x038F` forment un petit bloc de configuration écrit dans la foulée
+(`0x038E = 0`, `0x038F = r5`), non identifié.
+
 ### `XRAM 0x009D` — index d'effet RGB
 
 Vingt sites y accèdent. Trois convergences l'identifient :
