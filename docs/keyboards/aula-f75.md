@@ -1457,12 +1457,101 @@ Le dump donne l'offset 5 à **0**, donc le clavier était en mode **par effet** 
 que la luminosité effective soit 9 (issue de l'enregistrement) et non 4 (la copie globale à
 l'offset 6).
 
-##### Et les bits 6-4 de `b1`
+##### Les bits 6-4 de `b1` — c'est bien la vitesse
 
-**Ma piste était fausse.** Le troisième paramètre borné à 4 est `0x0D9D`, une variable globale
-restaurée de l'offset 7 — pas un champ de l'enregistrement par effet. Les bits 6-4 de `b1`
-(valeur 3 dans le dump) ne sont lus par **aucun** des masques identifiés : `0x0F` en `0x117E`,
-`0x8F` en `0x8F6A`. Ils restent non attribués.
+> **Correction d'une correction.** Au tour précédent j'ai retiré cette piste en la déclarant
+> fausse. Elle était juste : je n'avais cherché que les masques `0x0F` et `0x8F`, et raté
+> `anl a, #0xF0` en `0x11A8`.
+
+Un **quatrième** accès à `b1`, dans la branche « par effet » de `fcn.00001111` :
+
+```asm
+0x119D  mov a,#0x46 ; add a,r5 ; ...      ; DPTR = 0x0346 + 2e   (b1)
+0x11A7  movx a,@dptr
+0x11A8  anl a,#0xf0                        ; bits 7-4
+0x11AF  mov r0,#0x04 ; lcall fcn.00004DD8  ; decalage de 4 bits a droite
+0x11B4  mov dptr,#0x0d9d ; ...             ; -> vitesse
+```
+
+`fcn.00004DD8` décale `r4:r5:r6:r7` de `r0` bits vers la droite — le pendant de `fcn.00004DC5`
+déjà rencontré pour la table de descripteurs. Et la réécriture, en `0x8F6A`, est l'exacte
+inverse :
+
+```asm
+anl  a, #0x8f                   ; garde le bit 7 et les bits 3-0 de b1
+mov  dptr,#0x0d9d ; movx a,@dptr
+mov  B,#0x10 ; mul ab           ; vitesse x 16
+orl  a, r7                      ; b1 = (b1 & 0x8F) | (vitesse << 4)
+```
+
+La vitesse étant bornée à 4, `vitesse << 4` ne dépasse jamais `0x40` et ne touche donc jamais le
+bit 7. **En pratique `b1[6:4]` est la vitesse**, et `b1[7]` est un bit libre que l'écriture
+préserve.
+
+#### La symétrie complète
+
+| Paramètre | Global | Par effet | Borne par effet |
+| --- | --- | --- | --- |
+| luminosité | offset 6 — `0x0313` | `b0[4:0]` | `CODE[0xA8D5 + e]` = 9 |
+| vitesse | offset 7 — `0x0314` | `b1[6:4]` | `CODE[0xA8BC + e]` = 4 |
+| couleur | offset 8 — `0x0315[3:0]` | `b1[3:0]` | `CODE[0xA8A3 + e]` = 7 |
+| sens | offset 8 — `0x0315[7]` | `b0[7]` | drapeau `0x24.3` |
+
+Chaque paramètre existe donc en **deux exemplaires**, et l'offset 5 dit lequel fait foi.
+
+##### `XRAM 0x0312` (offset 5) — l'aiguillage
+
+Six références, **toutes des lectures `jz`**, et — comme `0x031B` — aucune écriture directe : il
+est posé par le protocole de configuration via le pointeur de bloc.
+
+| Site | Rôle |
+| --- | --- |
+| `0x111B` | restauration : branche globale ou branche par effet |
+| `0x7990`, `0x7A26` | idem, dans `fcn.00007928` |
+| `0x8C85` | incrément **luminosité** — persister vers `0x0313` ou vers `b0` |
+| `0x8F45` | incrément **vitesse** — vers `0x0314` ou vers `b1[6:4]` |
+| `0x93CE` | incrément **couleur** — vers `0x0315` ou vers `b1[3:0]` |
+
+Les trois gestionnaires de touches consultent donc le même bit pour savoir **où écrire** la
+valeur modifiée. Dump : **0** → mode par effet.
+
+##### `XRAM 0x0315` (offset 8) — l'homologue global de `b1`
+
+```asm
+0x1121  movx a,@dptr ; rlc a ; mov 0x24.3, c    ; bit 7  -> sens
+0x1138  movx a,@dptr ; anl a,#0x0f ; -> 0x011C  ; bits 3-0 -> couleur
+0x93D4  a = [0x0315] & 0x80 ; a |= [0x011C] ; [0x0315] = a     ; reecriture
+```
+
+Dump : `0x07` → couleur 7 (arc-en-ciel), sens 0. Cohérent avec l'enregistrement par effet
+(`b1 = 0x37` → couleur 7) — les deux exemplaires sont en accord.
+
+##### Le drapeau `0x24.3` — le sens de l'animation
+
+Sept sites. Écrit depuis le bit 7 du réglage (`0x1126` en global, `0x1172` en par-effet), effacé
+par deux fonctions de rendu (`0x7474`, `0xEF8A`), lu par trois. Le plus parlant est
+`fcn.0000A3F4` :
+
+```asm
+0xA3F4  jnb 0x24.3, 0xA42D
+0xA3FF  mov dptr,#0x08c3 ; movx a,@dptr ; add a,#0x14    ; +20
+...
+0xA435  mov dptr,#0x08c3 ; movx a,@dptr ; add a,#0xec    ; -20
+```
+
+**`+20` d'un côté, `−20` de l'autre**, sur le même compteur de position `0x08C3` (qui reboucle
+sur `cjne a,#0x11`, soit 17). C'est un **sens de défilement**.
+
+##### Relecture finale du clavier dumpé
+
+| | Global | Par effet (effet 4, `09 37`) |
+| --- | --- | --- |
+| luminosité | 4 | **9** |
+| vitesse | 4 | **3** |
+| couleur | 7 (arc-en-ciel) | **7** (arc-en-ciel) |
+| sens | 0 | **0** |
+
+Offset 5 = 0, donc ce sont les valeurs **par effet** qui s'appliquent.
 
 ##### Trois tables de bornes par effet
 
