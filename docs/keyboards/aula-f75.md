@@ -1846,13 +1846,47 @@ ordinaires (`0x01`–`0x0E`).
 `0x2C.3` est posé ici, et effacé en un seul endroit — `fcn.0000929E` (`0x935E`), une routine de
 réinitialisation qui remplit une zone de `0xFF`, écrit `[0x0C44] = 2` et efface aussi `0x26.7`.
 
-**Aucune instruction de bit ne le teste.** Les seules lectures de l'octet `0x2C` sont trois
-`orl a, 0x2c` en `0x7AD0`, `0x7AEE` et `0x7BF1` — un OR qui fusionne les huit bits, donc au mieux
-un test « au moins un drapeau posé », jamais spécifique au bit 3.
+**Aucune instruction de bit ne le teste, et aucune lecture d'octet non plus.**
 
-> Soit ce drapeau est vestigial, soit il ne sert qu'à cette agrégation. Je le signale sans
-> trancher : c'est le genre de détail qui a l'air anodin et qui explique un comportement trois
-> mois plus tard.
+> **Correction.** J'avais annoncé trois `orl a, 0x2c` en `0x7AD0`, `0x7AEE` et `0x7BF1`, et
+> conclu à un possible test agrégé. C'étaient **trois faux positifs**. Validés au désassemblage :
+>
+> ```
+> 0x7ACF  MOV A, #0x45      ; octets 74 45
+> 0x7AD1  ADD A, R4         ; octet  2C
+> ```
+>
+> Les octets `45 2C` sont l'opérande de `mov a,#0x45` suivie de l'opcode de `add a, r4`. L'idiome
+> `mov a,#0x45 ; add a,r4` construit un pointeur vers `0x0C45 + r4`, et il apparaît trois fois.
+> Après validation instruction par instruction : **zéro** accès à l'octet `0x2C` dans toute
+> l'image.
+
+`0x2C.3` est donc **un drapeau mort** : posé à la réception d'une trame `0x03`, effacé par la
+routine de réinitialisation `fcn.0000929E`, et jamais consulté — ni par bit, ni par octet.
+
+### `fcn.00007AAD` — la fonction qui contenait ces octets
+
+Appelée depuis `main` (`0x919A`), gardée par `0x28.1` et `0x29.0`. Elle balaie **trois tableaux
+parallèles** indexés par le même compteur :
+
+| Base | Rôle |
+| --- | --- |
+| `0x0C37 + i` | état / drapeau par entrée |
+| `0x0C45 + i` | valeur courante |
+| `0x0390 + i` | valeur souhaitée |
+
+Le motif « si l'état est posé et la valeur courante est nulle, recopier la valeur souhaitée » en
+fait une **file de transitions**, mais elle porte une table de sauts que le décompilateur n'arrive
+pas à normaliser (`Could not find normalized switch variable`), plus un chevauchement d'instructions
+signalé en `0x7E23`. Je ne la documente pas plus loin : le C n'est pas fiable ici, et il faudrait
+la reprendre au désassemblage.
+
+> **Frontières de fonction : les deux outils divergent.** Ghidra donne à `0x7AAD` un corps de
+> `0x7AAD`–`0x7D73`, soit 711 octets. r2 découpe la même plage en deux — `fcn.00007AAD` (245 o) et
+> `fcn.00007C12` (354 o). Le découpage de r2 est le plus fin, et `0x7C12` a ses propres lecteurs
+> (`0x011C`, `0x08C3`). Aucun des deux outils n'est autorité sur les bornes ; c'est à vérifier au
+> cas par cas.
+
 
 ### `fcn.00007928` — le décodeur de l'encodeur rotatif
 
