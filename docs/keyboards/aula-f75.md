@@ -64,11 +64,35 @@ n'en peuple que 15. C'est bien **15** colonnes physiques.
 
 | Élément | État |
 | --- | --- |
-| Correspondance matrice de touches ↔ grille LED | ⚠️ le keymap suppose une correspondance 1:1 avec la grille OpenRGB — **non vérifiée** |
+| Correspondance matrice de touches ↔ grille LED | ✅ **vérifiée** par capture HID indépendante — voir ci-dessous |
 | Rendu RGB (permutation ligne/couleur) | ❌ les 18 broches PWM sont déclarées, mais `indicators.c` n'est pas porté |
-| Broches inutilisées identifiées | ❓ `P0.0` `P0.1` `P0.5` `P0.6` `P4.1` `P4.4` `P4.5` `P4.7` `P5.5` `P5.6` `P7.4` `P7.7` — rôles inconnus (switches ? batterie ?) |
+| Rotation d'encodeur | ❌ non implémentée (phases identifiées : `P0.5` / `P0.6`) |
+| Broches au rôle inconnu | ❓ `P0.0` `P0.1` `P4.1` `P4.4` `P4.5` `P4.7` `P5.5` `P5.6` `P7.4` `P7.7` |
 | Veille | ❌ désactivée volontairement (`USER_SLEEP_NONE`) |
 | Sans-fil | ❌ hors périmètre, voir ci-dessous |
+
+## Matrice : 81 touches, pas 80 — l'encodeur
+
+Une **capture HID physique indépendante**
+([tiagoluizo/smk](https://github.com/tiagoluizo/smk/blob/aula-f75-port/docs/superpowers/evidence/2026-08-07-aula-f75-keymap-capture.md))
+a mappé la matrice 6×15 sur des usages HID uniques `0x04..0x5D`. Confrontée rangée par rangée à la
+disposition dérivée d'OpenRGB, elle **correspond position par position** — avec une différence :
+
+**Il y a 81 commutateurs, pas 80.** La position `[ligne 0][colonne 14]` est l'**appui d'encodeur**.
+C'est une vraie position de matrice, invisible pour OpenRGB parce qu'elle n'a **pas de LED** — d'où
+90 LED pour 81 touches, et 9 coordonnées réellement inutilisées.
+
+La **rotation** est hors matrice. Poller `@ 0x7928`, appelé depuis le tick :
+
+```asm
+0x792b   mov  a, P0
+0x792f   swap a          ; P0.5 -> bit1, P0.6 -> bit2
+0x7930   rrc  a          ; -> bit0, -> bit1
+0x7931   anl  a, #0x03   ; garde les deux phases
+```
+
+→ **phases sur `P0.5` et `P0.6`**, tous deux en entrée sous `P0CR = 0x9C`. Vérifié ici, et
+cohérent avec l'init GPIO relevée indépendamment. Non implémentée dans ce portage.
 
 ## RGB : pourquoi le rendu de l'Air60 n'est pas réutilisable
 
