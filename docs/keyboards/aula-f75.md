@@ -479,7 +479,17 @@ avec un **programmateur CH341** (~5 €), en mode « Beken SPI » et non génér
 relié à CEN** pour piloter le reset. C'est nettement plus accessible que le Raspberry/Banana Pi de
 l'article d'origine, ou que le dongle vendeur.
 
-**⚠️ La transposition à la famille BK34xx n'est PAS établie.** La question a été posée
+**⚠️ Aucun outil communautaire ne prend en charge la famille BK3xxx.** Vérifié :
+[`BK7231GUIFlashTool`](https://github.com/openshwprojects/BK7231GUIFlashTool) (428 ★, maintenu,
+dernier push 2026-08-10) liste ses modes — BK7231M/N/T/U, BK7236, BK7238, BK7252, BK7252N, BK7258,
+« Beken SPI CH341 » et « Generic SPI CH341 » — soit **uniquement la famille WiFi BK72xx**. Une
+recherche de `BK3xxx` dans l'intégralité de ses sources C# ne renvoie **aucune occurrence**.
+
+Le mode « Generic SPI CH341 » sert à lire une flash SPI *externe* (boîtier SOIC8). Celle du BK3632
+est **interne** : il faudrait la séquence d'entrée en mode esclave SPI, qui est spécifique à la
+famille BK72xx.
+
+**La transposition à la famille BK34xx n'est PAS établie.** La question a été posée
 textuellement sur ce fil le 21 juillet 2025 — « I have a bk3432 chip […] is the initialization
 sequence the same? » — et la seule réponse, en octobre 2025, a été « Just try ». Personne n'a
 publié de confirmation.
