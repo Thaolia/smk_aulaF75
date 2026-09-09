@@ -1793,6 +1793,67 @@ if (g_settings_per_effect == 0) {
 > Une nuance : la lecture masque `b0 & 0x1F`, l'écriture n'en préserve que le bit 7 et laisse donc
 > sept bits utiles. La luminosité étant bornée à 9, la différence ne se voit jamais.
 
+### La trame `0x03` — l'annonce de connexion
+
+C'est la plus courte des trois branches du parseur, et **la seule qui ne vérifie aucune somme de
+contrôle** — les trames `0x02` et `0x08` la vérifient toutes deux.
+
+```asm
+0x0778  a = [0x0120]              ; octet 0 de la trame
+0x077D  cjne a, #0x03, autre
+0x0780  setb 0x2C.3
+0x0782  clr a ; movx [0x0150], a  ; compteur de repos remis a zero
+0x0787  r5 = 0 ; r7 = 0xF0
+0x078A  lcall euart0_reply        ; -> trame 01 F0 00 00 00 <ck>
+0x078D  IDATA[0x18] = 0x06        ; banque 3, R0
+0x0790  IDATA[0x17] = 0xFF        ; banque 2, R7
+0x0793  ljmp sortie
+```
+
+Les deux écritures de registre ne sont pas décoratives : chacune a **un consommateur unique et
+identifié**, et c'est ce qui donne le sens de la trame.
+
+| Écriture | Consommateur | Effet |
+| --- | --- | --- |
+| `[0x0150] = 0` | branche de repos de `0x3901` | remet à cent tics l'échéance de la prochaine requête d'état `0x06` |
+| `BANK3_R0 = 6` | queue de `euart0_parse` : `if (++R0 > 5) { R0 = 0; 0x801F(); }` | **la toute prochaine trame déclenche la routine de batterie** |
+| `BANK2_R7 = 0xFF` | `0x801F` : `if (R7 == 0xFF) { R7 = [0x0151]; poser le drapeau }` | **la jauge affichée saute d'un coup à la valeur réelle** au lieu de converger |
+
+Autrement dit : à la réception d'une trame `0x03`, le clavier remet à zéro l'horloge de la
+liaison, **court-circuite l'amortissement de la jauge** pour qu'elle affiche immédiatement le vrai
+niveau, programme un envoi de batterie sans attendre, et accuse réception.
+
+C'est le comportement d'une **annonce de (re)connexion** : on ne fait pas glisser doucement une
+jauge quand le lien vient de s'établir, on l'affiche juste. L'absence de somme de contrôle va dans
+le même sens — une trame de service minimale.
+
+*Le nom « annonce de connexion » est inféré de ces trois effets ; les effets, eux, sont lus.*
+
+#### Les deux accusés de réception
+
+`euart0_reply(r7, r5)` compose `01 <r7> <r5> 00 00 <somme>`. Les deux seuls appels du parseur :
+
+| Site | Trame émise | Déclencheur |
+| --- | --- | --- |
+| `0x078A` | `01 F0 00 00 00 <ck>` | trame `0x03` reçue |
+| `0x0811` | `01 F1 00 00 00 <ck>` | trame `0x08` dont `octet[2] & 0x7F != 8` |
+
+`0xF0` et `0xF1` sont donc deux **codes d'accusé** dans une plage distincte des commandes
+ordinaires (`0x01`–`0x0E`).
+
+#### Un drapeau qui n'est jamais consulté
+
+`0x2C.3` est posé ici, et effacé en un seul endroit — `fcn.0000929E` (`0x935E`), une routine de
+réinitialisation qui remplit une zone de `0xFF`, écrit `[0x0C44] = 2` et efface aussi `0x26.7`.
+
+**Aucune instruction de bit ne le teste.** Les seules lectures de l'octet `0x2C` sont trois
+`orl a, 0x2c` dans `fcn.00007928` — un OR qui fusionne les huit bits, donc au mieux un test
+« au moins un drapeau posé », jamais spécifique au bit 3.
+
+> Soit ce drapeau est vestigial, soit il ne sert qu'à cette agrégation. Je le signale sans
+> trancher : c'est le genre de détail qui a l'air anodin et qui explique un comportement trois
+> mois plus tard.
+
 ### Ce qui reste ouvert sur EUART0
 
 Le sous-système est couvert de bout en bout : registres, débit, ISR, les deux handshakes, les
@@ -1810,7 +1871,6 @@ Restent, par ordre décroissant d'intérêt :
 | Point | Ce qu'on sait |
 | --- | --- |
 | Passage en mode 2,4 GHz | aucune écriture directe de la valeur 1 dans `g_transport` |
-| Trame reçue `0x03` | pose `0x2C.3`, efface `0x0150`, répond — sens non établi |
 | Paramètres `0xF0` / `0xF1` de `euart0_reply` | deux appels depuis le parseur, valeurs non interprétées |
 | Opcode `0x4A` | un bloc de 2 octets, charge **remplie de zéros** par `0x3CF9` — probablement une fin de transfert |
 | Handlers 8, 9, 10 du séquenceur | `0x3D25` et `0x3D1D`, n'émettent aucun opcode |
