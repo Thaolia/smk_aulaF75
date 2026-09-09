@@ -839,6 +839,91 @@ venant de `0x66F5`. Ghidra donne `0x64F1`–`0x66F8`, soit **520 octets**, et c'
 le corps continue sans `ret`. C'est l'inverse exact du cas `0x7AAD`, où r2 avait raison. **Aucun des
 deux n'est autorité ; il faut regarder le flot.**
 
+### `0x9DA4` et `0x5BE9` — la couleur unique et l'automate
+
+#### D'abord `rgb_scroll_step` (`0xA3F4`), que les deux emploient
+
+```asm
+0xA3F4  jnb 0x24.3, 0xA42D        ; le bit choisit le SENS
+        ; sens avant, pas selon l'effet [0x0896] :
+        ;   0x0A        -> +20
+        ;   0x0B, 0x11  -> +2
+        ;   sinon       -> +1
+0xA421  mov dptr,#0x08C3 ; movx a ; clr c ; subb a,r7
+0xA427  jc  0xA462 ; clr a ; movx @dptr,a     ; si position >= r7, repli a 0
+```
+
+Donc **`rgb_scroll_step(n)` avance `g_scroll_pos` (`0x08C3`) modulo `n`**, d'un pas propre à
+l'effet, et `0x24.3` inverse le sens — c'est le réglage « direction » du bloc de configuration.
+`0x9DA4` et `0x746A` l'appellent avec `0xC0` (192, la taille de la roue), `0x7C12` avec `0x80`.
+
+#### `0x9DA4` — toute la matrice d'une seule couleur (effet d'indice 3)
+
+Cent quarante-neuf octets, et la structure la plus simple des quatre moteurs vus jusqu'ici :
+
+```c
+rgb_scroll_step(0xC0);
+teinte = roue[g_scroll_pos];        /* CODE 0x2B2A + pos * 3, ordre (R,G,B) */
+rgb_apply_brightness();             /* une seule fois, hors boucle */
+pour chaque colonne 0..14, chaque ligne 0..5 :
+    si (CODE[0xC500 + col*6 + ligne] != 0xFF)
+        rgb_key_suppressed(...) ; si non supprimee : rgb_pixel_write()
+```
+
+**La couleur est calculée une fois, avant la boucle** — tout le clavier prend la même teinte, qui
+défile dans la roue. Cet effet **n'interroge jamais `0x011C`** : il ignore le mode de couleur et
+utilise toujours la roue.
+
+#### `0x5BE9` — un automate de propagation à quatre directions (effets 4, 7 et 13)
+
+Deux cent soixante-cinq octets, partagés par trois gestionnaires (`0x1BEF`, `0x1C65`, `0x1D00`).
+Il ne dessine pas une figure : il fait **évoluer un état**, sur **quatre cartes de bits** de quinze
+octets, un octet par colonne, six bits utiles par octet (une ligne par bit).
+
+| Base | Sens de propagation | Opération, par trame |
+| --- | --- | --- |
+| `0x0001` | vers la **droite** | `A[0x0F − c] = A[0x0E − c]`, bord remis à zéro |
+| `0x013B` | vers la **gauche** | `B[c − 1] = B[c]`, bord remis à zéro |
+| `0x08C6` | vers le **haut** | `C[c] >>= 1` |
+| `0x02E8` | vers le **bas** | `D[c] <<= 1` |
+
+Les bases sont confirmées au désassemblage (`add a,#0xE8 ; addc a,#0x02`, `mov a,#0xC6 ; addc a,#0x08`,
+`mov a,#0x3B ; addc a,#0x01`) — le C seul ne suffisait pas, la correction d'emprunt des `CONCAT11`
+est facile à mal lire.
+
+La trame se déroule en trois phases :
+
+1. **Tracer** — union des quatre cartes ; pour chaque bit posé, les tables de position
+   `CODE 0x2DED` et `CODE 0x2F6B` donnent les coordonnées, puis un des chemins de dessin selon un
+   bit d'IDATA : soit `fcn.00005114(1, …)` seul, soit les trois `0x5114(0, …)`, `0xAEB3(0, …)` et
+   `0x7108(…)`.
+2. **Propager** — les quatre opérations du tableau ci-dessus, plus l'effacement des deux bords
+   (`0x0001` et `0x0149`).
+3. **Recombiner** — `A[c] |= C[c] | D[c]` et `B[c] |= C[c] | D[c]`, ce qui fait repartir les fronts
+   verticaux vers la gauche et la droite : la propagation devient **diagonale**.
+
+Si aucun bit n'était posé (`0x0EE7` reste à 1), un drapeau d'IDATA est levé — l'animation signale
+qu'elle est éteinte.
+
+##### L'effet 13 s'auto-alimente
+
+```c
+if (g_palette_effect_idx == 13 && ++[0x08BE] > 5) {
+    [0x08BE] = 0;
+    bit = alterne(1, 0x20);                     /* ligne 0 ou ligne 5 */
+    [0x0007] |= bit; [0x0141] |= bit;           /* colonne 6 des quatre cartes */
+    [0x02EE] |= bit; [0x08CC] |= bit;
+}
+```
+
+Toutes les six trames, une graine est injectée **en colonne 6**, alternativement sur la ligne 0 et
+la ligne 5. Les trois autres effets qui partagent ce moteur n'ont pas cette injection : leur graine
+vient d'ailleurs — vraisemblablement d'une frappe. **C'est le moteur des ondes qui se propagent
+depuis les touches**, et l'effet 13 est sa version qui tourne toute seule.
+
+> Les quatre `+6` (`0x0007`, `0x0141`, `0x02EE`, `0x08CC`) tombent exactement à `base + 6` pour les
+> quatre bases : c'est le contrôle qui confirme la lecture des bases.
+
 ### `XRAM 0x009D` — index d'effet RGB
 
 Vingt sites y accèdent. Trois convergences l'identifient :
