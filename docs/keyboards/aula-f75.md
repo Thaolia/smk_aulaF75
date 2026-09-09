@@ -568,6 +568,135 @@ pour retrouver sa palette.
 > entre `0x7B4C` et `0x7B8A`. La reconstruction de table de Ghidra déborde, et c'est cette
 > destination inventée qui lui fait fusionner `0x7AAD` et `0x7C12` en une seule fonction.
 
+### Les deux moteurs de rendu — `0x64F1` et `0x7C12`
+
+L'ordonnanceur appelle seize routines de rendu. Deux d'entre elles portent les deux familles
+d'animation, et elles se lisent enfin en C.
+
+#### D'abord l'outil : `fcn.00004E39`, l'assistant de pointeur Keil
+
+```asm
+0x4E39  mul ab ; add a,DPL ; mov DPL,a ; mov a,B ; addc a,DPH ; mov DPH,a ; ret
+```
+
+**`dptr += a × b`**, en sept octets, appelé **94 fois**. Toute indexation de tableau à pas non
+trivial passe par lui. Le décompilateur le rend en `FUN_CODE_4e39(3, ligne)` au milieu d'une
+expression d'adresse : ce n'est pas un appel métier, c'est l'opérateur `[]`. Le nommer
+`dptr_add_mul` rend lisibles d'un coup toutes les décompilations RGB.
+
+#### `0x64F1` — la décroissance par touche
+
+Double boucle sur toute la matrice : `0x0EE2` = colonne **0..14**, `0x0EE3` = ligne **0..5**.
+
+| Tableau | Adresse | Contenu |
+| --- | --- | --- |
+| masque d'exclusion | `0x0BFF + colonne` | un octet par colonne ; la touche est traitée si le bit `1 << ligne` est **à zéro** |
+| couleur par touche | `0x0428 + colonne × 18 + ligne × 3` | trois octets — 15 × 6 × 3 = 270 o |
+| intensité par touche | `0x0C17 + colonne × 6 + ligne` | un octet — 90 o |
+
+Pour chaque touche retenue :
+
+```c
+composante = (couleur[i] * intensité) >> 5;     /* i = 0,1,2 */
+rgb_key_suppressed(ligne, colonne);
+if (!supprimée) { rgb_apply_brightness(); rgb_pixel_write(); }
+
+if (g_palette_effect_idx == 13)  intensité = (intensité < 2) ? 0 : intensité - 2;
+else                             if (intensité) intensité -= 1;
+```
+
+**C'est le moteur réactif** : chaque touche porte sa propre couleur et sa propre intensité, et
+l'intensité **décroît d'un cran par trame** — de deux crans pour l'effet 13, qui s'éteint donc deux
+fois plus vite. Le `>> 5` fait de l'intensité une échelle sur **32 niveaux**.
+
+Les trois tableaux ne sont atteints que par pointeur calculé : `dptr_refs` sur `0x0428`, `0x0C17`
+ou `0x0BFF` ne renvoie **rien**. Ils n'ont été trouvés que par la décompilation.
+
+#### `0x7C12` — le dégradé défilant (effet d'indice 2)
+
+Une seule boucle, sur les colonnes **0..14** — pas d'état par touche. La couleur est choisie une
+fois par colonne, selon le mode de couleur `0x011C` :
+
+| `0x011C` | Source |
+| --- | --- |
+| `< 7` | la palette de l'effet : `CODE 0xC800 + [0x0896] × 21 + mode × 3` |
+| `== 7` | la **roue de teintes** : `CODE 0x2B2A + phase × 3` |
+| `> 7` | aucune couleur écrite |
+
+La roue compte **192 entrées de trois octets** (`0x2B2A`–`0x2D69`), et la phase avance de **11 par
+colonne** avec repli modulo 192 (`add a,#0x0B` puis, si `≥ 0xC0`, `add a,#0x40`). C'est cela qui
+produit l'arc-en-ciel réparti sur le clavier.
+
+Ensuite `fcn.0000A17B([0x08C3], 0xC480)` applique la position de défilement, puis
+`rgb_apply_brightness`. La boucle interne parcourt les six lignes et ne dessine que si la position
+existe :
+
+```c
+if (CODE[0xC500 + colonne * 6 + ligne] != 0xFF) { ... }
+```
+
+##### `CODE 0xC500` — la carte de présence des touches
+
+Quinze colonnes de six octets, `0xFF` = pas de touche à cette position.
+
+```
+col  0 : 00 01 02 03 04 05        col  8 : 40 41 42 43 4c 45
+col  1 : ff 09 0a 0b 14 0d        col  9 : 48 49 4a 4b 54 4d
+col  2 : 10 11 12 13 1c 15        col 10 : 50 51 52 53 5c 55
+col  3 : 18 19 1a 1b 24 ff        col 11 : 58 59 5a 5b 64 ff
+col  4 : 20 21 22 23 2c ff        col 12 : 60 61 62 63 0c 65
+col  5 : 28 29 2a 2b 34 2d        col 13 : 68 69 6a 6b 6c 6d
+col  6 : 30 31 32 33 3c ff        col 14 : 70 71 72 73 74 75
+col  7 : 38 39 3a 3b 44 ff
+```
+
+**Six trous sur quatre-vingt-dix positions, donc 84 emplacements**. Les valeurs suivent
+`colonne × 8 + ligne`, avec des exceptions visibles (`0x14` en col 1, `0x0C` en col 12) — ce sont
+des positions déplacées.
+
+#### Les deux tables de couleur n'ont pas le même ordre d'octets
+
+Vérifié instruction par instruction, pas déduit du C :
+
+| Table | `+0` | `+1` | `+2` |
+| --- | --- | --- | --- |
+| palette `0xC800` | `0x011D` | `0x0000` | `0x0E25` |
+| couleur par touche `0x0428` | `0x011D` | `0x0000` | `0x0E25` |
+| roue de teintes `0x2B2A` | `0x0E25` | `0x0000` | `0x011D` |
+
+**La roue est rangée à l'envers de la palette.** L'octet du milieu est le même dans les trois cas.
+
+> **Ce que cela remet en cause.** Les trois composantes ont été nommées `g_color_r` / `g_color_g` /
+> `g_color_b` (`0x0000` / `0x011D` / `0x0E25`) sans preuve : rien, dans ce qui a été lu jusqu'ici,
+> ne dit laquelle est le rouge. La table « rouge vert bleu jaune magenta cyan blanc » donnée plus
+> haut pour la palette d'usine suppose l'ordre `(R,G,B)` à l'offset `+0/+1/+2` ; si l'ordre réel est
+> `(G,R,B)`, les deux premières couleurs et les deux avant-dernières s'échangent. Les octets
+> (`ff 00 00`, `00 ff 00`, `00 00 ff`, `ff ff 00`, `ff 00 ff`, `00 ff ff`, `ff ff ff`) sont
+> compatibles avec les deux lectures. **Trancher demande de suivre `0x0E46` / `0x0E42` / `0x0E3F`
+> jusqu'au canal PWM** ; c'est un point ouvert, pas un acquis.
+
+#### `0x0EE4` n'est pas un drapeau partagé
+
+`0x64F1` y écrit `1` et s'en sert comme **graine du masque** (`1 << ligne`) ; `0x7C12` y écrit `0`
+puis s'en sert comme **phase de la roue de teintes**. Même octet, deux usages sans rapport — un
+recyclage de variable par le compilateur. Conclure à un drapeau d'état partagé aurait été une
+erreur naturelle et fausse.
+
+#### `fcn.0000598F` — le filtre d'extinction
+
+Appelée par les deux moteurs avec `(ligne, colonne)`, elle renvoie dans `R4` un « ne pas
+allumer ». Son corps est une longue suite de `if (ligne == a && colonne == b && condition) return`,
+les conditions portant sur `g_transport`, `0x0328` (slot Bluetooth courant), `0x030A`, `0x09BA` et
+une dizaine de bits d'IDATA. **C'est la logique des touches-témoins** : celles qui affichent le
+slot apparié ou le mode de liaison sont retirées de l'animation pour être pilotées à part.
+
+#### Encore une divergence de bornes
+
+r2 donne à `0x64F1` **onze octets** — il coupe à `0x64FB` parce que `0x64FC` est la cible d'un saut
+venant de `0x66F5`. Ghidra donne `0x64F1`–`0x66F8`, soit **520 octets**, et c'est lui qui a raison :
+le corps continue sans `ret`. C'est l'inverse exact du cas `0x7AAD`, où r2 avait raison. **Aucun des
+deux n'est autorité ; il faut regarder le flot.**
+
 ### `XRAM 0x009D` — index d'effet RGB
 
 Vingt sites y accèdent. Trois convergences l'identifient :
