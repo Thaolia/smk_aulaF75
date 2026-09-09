@@ -66,7 +66,7 @@ n'en peuple que 15. C'est bien **15** colonnes physiques.
 | --- | --- |
 | Correspondance matrice de touches ↔ grille LED | ✅ **vérifiée** par capture HID indépendante — voir ci-dessous |
 | Ordre de chargement des 18 canaux PWM | ✅ **relevé et implémenté** (`aula_rgb.c`) |
-| Correspondance canal ↔ (ligne, couleur) | ❌ demande une observation sur matériel |
+| Correspondance canal ↔ (ligne, couleur) | ✅ **établie via le driver OpenRGB** |
 | Câblage du rendu dans la boucle SMK | ❌ inadéquation d'architecture, voir ci-dessous |
 | Rotation d'encodeur | ❌ non implémentée (phases identifiées : `P0.5` / `P0.6`) |
 | Broches au rôle inconnu | ❓ `P0.0` `P0.1` `P4.1` `P4.4` `P4.5` `P4.7` `P5.5` `P5.6` `P7.4` `P7.7` |
@@ -128,9 +128,39 @@ deux DPTR via `INSCON` :
 sont chargés *avant* `PWM00-02`. Les adresses ont été recoupées avec la carte XDATA `0xFF80-0xFFFF`
 du datasheet SH68F90 CV2.0.
 
-C'est le contenu de `aula_rgb.c`. **Ce qui reste inconnu : quel canal allume quelle
-(ligne, couleur).** On sait dans quel ordre l'usine charge les registres, pas ce que chacun pilote.
-Trancher demande d'écrire une seule voie et de regarder quelle LED s'allume — donc du matériel.
+### Correspondance canal ↔ (ligne, couleur) — établie par le driver OpenRGB
+
+**Le code d'OpenRGB *est* le protocole documenté** — inutile de sniffer l'USB.
+`SinowealthKeyboard10cController::SetLEDsDirect` construit un feature report de **520 octets** :
+
+```c
+buf[0x00] = 0x06;                      // Report ID 6
+buf[0x01] = 0x08;                      // commande : écriture de la table de couleurs
+buf[0x04] = 0x01;                      // octets d'adresse
+buf[0x06] = 0x7A; buf[0x07] = 0x01;    // longueur = 0x017A = 378
+buf[0x08 + i*3] = R, G, B;             // 3 octets par LED, i = indice LED
+```
+
+Deux corrections à [l'article de xevrion](https://xevrion.dev/blogs/aula-f75-linux-reverse-engineering) :
+la commande est **`0x08`**, pas `0x0A`, et les couleurs font **3 octets** par LED, pas 4.
+
+L'indice LED est celui de la table de disposition, soit **`colonne × 6 + ligne`**. Par colonne,
+l'hôte envoie donc 18 octets : `ligne0 R,G,B`, `ligne1 R,G,B`, … D'où **`canal = ligne × 3 + couleur`**,
+et en combinant avec l'ordre de chargement :
+
+| Canaux | Lignes | Broches |
+| --- | --- | --- |
+| 0-5 | lignes 0 et 1 | `P1.0`…`P1.5` (`PWM20`…`PWM25`) |
+| 6-11 | lignes 2 et 3 | `P2.0`…`P2.5` (`PWM10`…`PWM15`) |
+| 12-14 | ligne 4 | `P3.3`…`P3.5` (`PWM03`…`PWM05`) |
+| 15-17 | ligne 5 | `P3.0`…`P3.2` (`PWM00`…`PWM02`) |
+
+**Deux lignes par port, six broches chacun.** La régularité du résultat est en soi un argument, et
+elle explique la rotation apparente du groupe P3 relevée dans la table de chargement.
+
+Reste une inférence : que le firmware range les octets reçus sans les permuter. C'est
+l'implémentation naturelle, et le fait que la permutation vive dans la table de registres plutôt
+que dans les données va dans ce sens. À confirmer sur matériel en n'allumant qu'une voie.
 
 ### Inadéquation d'architecture avec SMK
 

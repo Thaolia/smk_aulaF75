@@ -19,10 +19,30 @@
  * Noter la ROTATION dans le groupe P3 : PWM03-05 sont chargés AVANT PWM00-02.
  * C'est la seule irrégularité de la table, et elle est délibérée côté usine.
  *
- * ⚠️ Ce qui n'est PAS établi : quel canal correspond à quelle (ligne, couleur).
- * On sait dans quel ordre l'usine charge les registres, pas ce que chaque
- * registre allume. Cela demande une observation sur matériel : écrire une
- * seule voie et regarder quelle LED s'allume.
+ * CORRESPONDANCE CANAL <-> (LIGNE, COULEUR) -- établie.
+ *
+ * Le driver OpenRGB de ce clavier (SinowealthKeyboard10cController::SetLEDsDirect)
+ * envoie les couleurs linéairement, 3 octets par LED, à l'offset 0x08 + i*3, où
+ * i est l'indice LED de la table de disposition, soit colonne * 6 + ligne.
+ * Par colonne, l'hôte émet donc 18 octets dans l'ordre
+ * ligne0 R,G,B puis ligne1 R,G,B, etc. -- d'où :
+ *
+ *     canal = ligne * 3 + couleur
+ *
+ * Combiné à l'ordre de chargement relevé ci-dessus :
+ *
+ *     lignes 0-1  ->  P1.0 .. P1.5   (PWM20..PWM25)
+ *     lignes 2-3  ->  P2.0 .. P2.5   (PWM10..PWM15)
+ *     ligne  4    ->  P3.3 .. P3.5   (PWM03..PWM05)
+ *     ligne  5    ->  P3.0 .. P3.2   (PWM00..PWM02)
+ *
+ * Deux lignes par port, six broches chacun : la régularité du résultat est en
+ * elle-même un argument, et elle explique la rotation apparente du groupe P3.
+ *
+ * Reste une inférence : que le firmware d'usine range les octets reçus dans son
+ * framebuffer sans les permuter. C'est l'implémentation naturelle, et le fait
+ * que la permutation vive dans la table de registres plutôt que dans les données
+ * va dans ce sens. À confirmer sur matériel en n'allumant qu'une voie.
  */
 
 /* Adresses DUTY2 H et L, dans l'ordre de chargement d'usine */
