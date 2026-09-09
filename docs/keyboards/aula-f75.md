@@ -203,6 +203,47 @@ Liaison **EUART0** vers le BK3632, en **half-duplex** :
 La commande `0x09` est émise depuis `main()` (`0x9148`, `0x914D`) — probablement l'initialisation
 du lien.
 
+### Deux voies pour obtenir la sémantique
+
+#### A. Sniffer la liaison EUART0 — **recommandé**
+
+Le transport est déjà caractérisé (ci-dessus). Il suffit d'un analyseur logique sur la ligne de
+données du lien 8051 ↔ BK3632, en manipulant le clavier : bascule USB / BT / 2.4 G, appairage,
+appuis de touches. Les trames font 6 octets, commencent par `0x01`, et la broche `P0.2` indique le
+sens — donc on sait quoi chercher et comment séparer les deux directions.
+
+**Coût : un analyseur logique et un point de test.** Aucun flashage, aucun dessoudage, aucun
+nouveau binaire à désassembler. C'est la voie qui donne le protocole *tel qu'il est réellement
+parlé*.
+
+#### B. Dumper le firmware du BK3632 — beaucoup plus lourd
+
+Le BK3632 est un **ARM9**, 20 Ko de RAM, 160 Ko de flash, BLE 5.0 + 2.4 G propriétaire.
+
+Sur le **BK3432**, son frère, la [doc Tuya](https://developer.tuya.com/en/docs/iot/burn-and-authorize-BK3432-chip?id=Katc9lq3p4w1t)
+donne le câblage : MOSI/MISO sur **P0.4/P0.5**, deux lignes de contrôle sur **P0.6/P0.7**, **VPP sur
+RST**, plus 3 V et masse. Il faut un dongle *BEKEN SPI flasher* et le *HID Download Tool* en mode
+« SPI SOFT ». Le firmware s'y présente en trois parties : boot, stack, app.
+
+Ce que ça implique concrètement pour le F75 :
+
+1. Accéder aux pads `P0.4`-`P0.7`, `RST`, `VCC`, `GND` d'un **QFN32** sur le PCB — loupe, pointes
+   fines, voire dessoudage.
+2. Le dongle BEKEN, ou adapter [`BK7231_SPI_Flasher`](https://github.com/openshwprojects/BK7231_SPI_Flasher)
+   (Raspberry Pi, GPIO SPI) — **mais sa séquence d'init est celle du BK7231T**, et les fils
+   elektroda comparant BK3432 / BK3431 / BK7231 existent précisément parce qu'**elles diffèrent**.
+   Celle du BK3632 n'est pas établie.
+3. Puis désassembler un binaire **ARM9** de 160 Ko : une cible entièrement neuve.
+
+Et au bout, on obtiendrait l'implémentation du protocole, pas les échanges réels — alors que la
+voie A donne directement ces derniers.
+
+**Conclusion : la voie A d'abord.** La voie B ne se justifie que si l'on veut modifier le firmware
+du BK3632 lui-même.
+
+*(Les fils elektroda cités ici sont inaccessibles depuis cet environnement — timeouts systématiques,
+probablement un filtrage des IP datacenter. À lire depuis un navigateur.)*
+
 ### Pourquoi ce n'est pas livrable
 
 1. La **sémantique des commandes** n'est pas établie : on a les codes, pas leur signification.
