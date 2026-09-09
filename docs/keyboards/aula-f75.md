@@ -665,15 +665,82 @@ Vérifié instruction par instruction, pas déduit du C :
 | roue de teintes `0x2B2A` | `0x0E25` | `0x0000` | `0x011D` |
 
 **La roue est rangée à l'envers de la palette.** L'octet du milieu est le même dans les trois cas.
+La section suivante établit que `0x011D` est le rouge, `0x0000` le vert et `0x0E25` le bleu : les
+deux premières tables sont donc en `(R,G,B)` et la roue en `(B,G,R)`.
 
-> **Ce que cela remet en cause.** Les trois composantes ont été nommées `g_color_r` / `g_color_g` /
-> `g_color_b` (`0x0000` / `0x011D` / `0x0E25`) sans preuve : rien, dans ce qui a été lu jusqu'ici,
-> ne dit laquelle est le rouge. La table « rouge vert bleu jaune magenta cyan blanc » donnée plus
-> haut pour la palette d'usine suppose l'ordre `(R,G,B)` à l'offset `+0/+1/+2` ; si l'ordre réel est
-> `(G,R,B)`, les deux premières couleurs et les deux avant-dernières s'échangent. Les octets
-> (`ff 00 00`, `00 ff 00`, `00 00 ff`, `ff ff 00`, `ff 00 ff`, `00 ff ff`, `ff ff ff`) sont
-> compatibles avec les deux lectures. **Trancher demande de suivre `0x0E46` / `0x0E42` / `0x0E3F`
-> jusqu'au canal PWM** ; c'est un point ouvert, pas un acquis.
+#### Laquelle est le rouge — tranché
+
+La question restait ouverte : trois composantes, aucune preuve de leur couleur. La chaîne complète
+la referme, et chaque maillon est vérifié au désassemblage.
+
+**Maillon 1 — `rgb_apply_brightness` (`0xA0F0`).** Trois multiplications, chacune suivie d'une
+division par 80 (`mov r5,#0x50 ; lcall math_div16by8`) :
+
+| Source | Résultat 16 bits |
+| --- | --- |
+| `0x011D` | `0x0E46:0x0E47` |
+| `0x0000` | `0x0E42:0x0E43` |
+| `0x0E25` | `0x0E3F:0x0E40` |
+
+Le gain vient de `CODE 0x2937 + [0x0D19]`, et vaut au plus 80 : le quotient tient donc sur un
+octet, celui de poids faible.
+
+> **Correction.** Une note antérieure appariait `0x0000, 0x011D, 0x0E25 → 0x0E46, 0x0E42, 0x0E3F`,
+> dans cet ordre. C'est faux : `0x011D` va vers `0x0E46`, `0x0000` vers `0x0E42`. Les deux premières
+> sont croisées — et c'est précisément l'appariement dont dépend toute la suite.
+
+**Maillon 2 — `rgb_pixel_write` (`0x761E`).** Il ne lit que l'octet de poids faible de chaque
+quotient, et les range à trois offsets consécutifs :
+
+```asm
+0x765B  add a,#0x52   ; dptr = 0x0152 + colonne x 18, puis += ligne x 3
+0x7678  mov a,r3      ; r3 = [0x0E47]   -> offset +0
+0x7684  add a,#0x53   ; +1
+0x7695  mov a,r5      ; r5 = [0x0E43]   -> offset +1
+0x76A4  add a,#0x54   ; +2
+0x76C1  mov a,r7      ; r7 = [0x0E40]   -> offset +2
+```
+
+**Maillon 3 — la table de destination est déjà connue.** `XRAM 0x0152 + colonne × 18 + ligne × 3`,
+soit 21 × 18 = **378 octets** (`0x0152`–`0x02CB`) : exactement la table que la commande hôte `0x08`
+sous-index 2 remplit, et dont l'opcode `0x42` relit 378 octets. Le pilote OpenRGB y écrit
+`buf[0x08 + i*3] = R, G, B` avec `i = colonne × 6 + ligne`.
+
+**Conclusion.** L'offset `+0` de cette table est le rouge, donc :
+
+| Adresse | Composante | Mise à l'échelle |
+| --- | --- | --- |
+| **`0x011D`** | **rouge** | `0x0E46:0x0E47` |
+| **`0x0000`** | **vert** | `0x0E42:0x0E43` |
+| **`0x0E25`** | **bleu** | `0x0E3F:0x0E40` |
+
+Les étiquettes `g_color_r` et `g_color_g` étaient donc **inversées** dans le montage Ghidra ;
+corrigé dans `tools/gh_setup.py`, ainsi que `g_scaled_r` / `g_scaled_g`.
+
+Il en découle l'ordre des trois tables :
+
+| Table | Ordre réel |
+| --- | --- |
+| palette `0xC800` | **(R, G, B)** |
+| couleur par touche `0x0428` | **(R, G, B)** |
+| roue de teintes `0x2B2A` | **(B, G, R)** |
+
+La table « rouge vert bleu jaune magenta cyan blanc » de la palette d'usine est donc **correcte**.
+
+##### Contrôle : la roue lue en (B, G, R) est un cercle des teintes
+
+```
+phase   0  ->  R=  0 G=  1 B=255     bleu
+phase  32  ->  R=  0 G=255 B=248     cyan
+phase  64  ->  R=  1 G=255 B=  0     vert
+phase  96  ->  R=255 G=248 B=  0     jaune
+phase 128  ->  R=255 G=  0 B=  1     rouge
+phase 160  ->  R=248 G=  0 B=255     magenta
+```
+
+Six segments de 32 pas, et **les 192 entrées ont toutes un maximum de 255** — saturation constante,
+la signature d'une roue de teintes. Avec un pas de 11 par colonne, les quinze colonnes couvrent
+165 des 192 phases : le dégradé fait presque un tour complet sur la largeur du clavier.
 
 #### `0x0EE4` n'est pas un drapeau partagé
 
@@ -1571,7 +1638,7 @@ Table `0x2937` :
 
 **Dix entrées, indices 0 à 9** — ce qui recoupe exactement la borne `subb a, #0x09` relevée en
 `0x7A18` et `0x7A86`. Le gain va de 0 à 80, et la division par 80 en fait un facteur de 0 à 1
-appliqué à trois grandeurs (`0x0000`, `0x011D`, `0x0E25` → `0x0E46`, `0x0E42`, `0x0E3F`).
+appliqué aux trois composantes (`0x011D` → `0x0E46`, `0x0000` → `0x0E42`, `0x0E25` → `0x0E3F`).
 
 Le maximum est **par effet**, lu dans une table CODE :
 
@@ -1587,7 +1654,8 @@ Valeur par défaut **4** (`0x1D10`, `0x1D31`). Valeur dans le dump : **9**, soit
 > `fcn.00000056` est bien une division (`div ab`, vérifiée), donc `fcn.0000A0F0` calcule
 > `x × table[0x0D19] / 80` — un facteur de 0 à 1 en dix pas. Et les trois grandeurs qu'il met à
 > l'échelle sont `0x0000`, `0x011D` et `0x0E25`, toutes trois écrites **juste après la lecture de
-> palette** dans `fcn.00004EA9` (`0x4ED9`, `0x4F1F`) : ce sont les trois composantes de couleur.
+> palette** dans `fcn.00004EA9` (`0x4ED9`, `0x4F1F`) : ce sont les trois composantes de couleur —
+> respectivement **vert**, **rouge** et **bleu**, voir *Laquelle est le rouge — tranché*.
 > Trois composantes, un seul facteur — c'est une commande de luminosité, pas de vitesse.
 
 ##### `XRAM 0x011C` — le mode de couleur (30 références)
@@ -1676,11 +1744,6 @@ Vérification sur le dump, en supposant `0x0896` = index d'effet :
 | `0x0E` | `0xC926` | 100 | *idem* |
 | `0x20` | `0xCAA0` | 101 | tout noir |
 | `0x2D` | `0xCBB1` | 101 | tout noir |
-
-> **Réserve.** Les noms de couleurs ci-dessus supposent que l'octet `+0` d'une entrée est le rouge.
-> C'est **non prouvé** : les trois composantes sont `0x011D` (`+0`), `0x0000` (`+1`) et `0x0E25`
-> (`+2`), et rien n'établit laquelle est le rouge. Voir *Les deux tables de couleur n'ont pas le
-> même ordre d'octets*.
 
 Les quinze effets de la famille A portent chacun leur palette de sept couleurs, toutes réglées
 sur la palette d'usine ; ceux de la famille B sont à zéro — ils n'utilisent pas de palette, ce qui
