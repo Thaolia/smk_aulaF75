@@ -1663,6 +1663,97 @@ dongle 2,4 GHz.
 
 C'est la troisième source d'effet, à côté des touches Fn et du chemin USB.
 
+### La table de remap décodée — la disposition d'usine
+
+La table de `0xCE00` (page 103) contient **84 enregistrements non nuls sur 128**, dont les
+indices 0 à 89. Lus **colonne par colonne**, six lignes par colonne, ils donnent ceci :
+
+```
+      c0    c1    c2    c3    c4    c5    c6     c7     c8    c9    c10   c11   c12   c13   c14
+ L0   Esc   .     Lum+  Lum-  Tab   H     cl3/2  cl3/1  Prec  Play  Suiv  Muet  Vol-  Vol+  (07)
+ L1   `     1     2     3     4     5     6      7      8     9     0     -     =     BSpc  Del
+ L2   Tab   Q     W     E     R     T     Y      U      I     O     P     [     ]     \     PgUp
+ L3   Caps  A     S     D     F     G     H      J      K     L     ;     '     #     Ent   PgDn
+ L4   MOD2  Z     X     C     V     B     N      M      ,     .     /     MOD32 \|    Up    End
+ L5   MOD1  MOD4  MOD8  .     .     Spc   .      .      Fn?   MOD16 .     .     Left  Down  Rght
+```
+
+**Les lignes 1 à 4 sont le bloc QWERTY exact**, colonne par colonne, sans une seule anomalie. La
+ligne 5 est la rangée du bas, la ligne 0 la rangée de fonction. Cela valide d'un coup la géométrie
+6 × 15 et l'ordre de balayage établis par ailleurs — matrice, pinout et keymap se recoupent.
+
+#### Correction : `b0` n'est pas un masque de modificateurs
+
+J'avais lu l'enregistrement comme `[modificateurs, classe, paramètre, usage]`, avec `0x02` =
+LeftShift. C'est faux, et le décalage de 24 bits le montre :
+
+```asm
+mov r0, #0x18 ; lcall fcn.00004DC5      ; decalage de 24 bits
+mov dptr, #0x0d18 ; mov a, r7 ; movx @dptr, a
+```
+
+`b0` va en **`XRAM 0x0D18`** — l'octet que j'avais déjà identifié comme celui recopié dans le
+tampon de rapport HID (`0x0D18 → 0x08C0`). C'est donc un **sélecteur de rapport**, pas un masque.
+
+Ce qui explique les entrées qui n'avaient aucun sens en modificateurs : `b0 = 0x02` avec
+`b3 = 0xB5` ne peut pas être « LeftShift + usage clavier 0xB5 », parce que `0xB5` n'est pas un
+usage clavier. C'est un usage **Consumer** :
+
+| `b3` | Usage Consumer |
+| --- | --- |
+| `0x6F` / `0x70` | luminosité écran − / + |
+| `0xB5` / `0xB6` | piste suivante / précédente |
+| `0xCD` | lecture / pause |
+| `0xE2` | muet |
+| `0xE9` / `0xEA` | volume + / − |
+
+**La rangée de fonction porte donc les commandes multimédia, pas F1–F12** — le réglage d'usine a
+la couche Fn inversée, ce qui est l'usage courant sur ces claviers.
+
+L'enregistrement se lit finalement :
+
+```
+b0  selecteur de rapport   -> 0x0D18   (0x00 clavier, 0x02 consumer, autres a determiner)
+b1  classe d'action        -> 0x0D17
+b2  parametre              -> 0x0D16
+b3  usage                  -> 0x0D15
+```
+
+#### Les six modificateurs, et la tension sur `0x0D17` levée
+
+Six positions portent une **puissance de deux** en classe d'action, sans usage :
+
+| Position | Classe | Touche |
+| --- | --- | --- |
+| L4 c0 | 2 | Maj gauche |
+| L4 c11 | 32 | Maj droite |
+| L5 c0 | 1 | Ctrl gauche |
+| L5 c1 | 4 | Win gauche |
+| L5 c2 | 8 | Alt gauche |
+| L5 c9 | 16 | Ctrl droite |
+
+Ce sont **exactement les six touches modificatrices**, et rien d'autre dans la table ne porte une
+puissance de deux. Cela lève la tension notée depuis longtemps sur `0x0D17` : le champ est bien
+utilisé **à la fois** comme index de classe (0 à 9, via la table de sauts `0xA68D`) et comme
+**masque** (le `0x08B2 &= ~0x0D17` de `0x7058`) — selon qu'il désigne une action ou un
+modificateur. La borne `< 10` du dispatcher laisse passer 1, 2, 4 et 8 mais rejette 16 et 32, qui
+n'existent que sur la voie masque.
+
+> *À noter :* l'ordre des bits ne suit pas celui des modificateurs HID (`0x04` tombe sur Win et
+> `0x08` sur Alt, alors que HID dit l'inverse). Le masque s'applique à `0x08B2`, un octet d'état
+> interne — sa numérotation n'a pas de raison de coïncider avec celle du rapport HID, et la
+> conversion se fait ailleurs.
+
+#### Deux entrées à part
+
+- **L5 c8** (indice 53) : `0D 00 00 00` — un sélecteur de rapport `0x0D`, aucune classe, aucun
+  usage. La position correspond à **Fn** sur un 75 % ANSI, touche que le firmware traite en
+  interne sans jamais l'émettre.
+- **L0 c14** (indice 84) : `07 00 00 1D` — rapport `0x07`, usage `0x1D`. C'est la position que
+  l'analyse de la matrice avait attribuée à **l'appui sur l'encodeur**.
+
+*Ces deux lectures sont inférées de la position ; le contenu des enregistrements, lui, est lu.*
+
 ### Ce que le décompilateur ajoute sur `euart0_parse`
 
 Le firmware a été rechargé dans **Ghidra 12.1.3** (`8051:BE:16:default`), avec l'espace `EXTMEM`
