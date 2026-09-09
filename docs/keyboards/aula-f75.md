@@ -432,6 +432,16 @@ Le datasheet donne les broches d'EUART0 :
 | --- | --- | --- |
 | **TXD** | **P5.5** | 8051 → BK3632 |
 | **RXD** | **P5.6** | BK3632 → 8051 |
+
+✅ **Remappage écarté par vérification.** Le SH68F90 peut déplacer son EUART0 sur `P3.3`/`P3.4`
+(`TXD_M`/`RXD_M`) en écrivant `0x5A` dans le registre **`MAPPING` (SFR `0x8A`)**, dont la valeur de
+reset est `0x00`. Une recherche de toute écriture vers `0x8A` — `mov`, `anl`, `orl` — dans
+l'intégralité du firmware d'usine ne renvoie **aucun résultat**. `MAPPING` reste donc à `0x00` et
+l'UART reste sur ses broches par défaut.
+
+C'était un contrôle nécessaire : `P3.3` et `P3.4` portent aussi `PWM03` et `PWM04`, soit les canaux
+12 et 13 du rétroéclairage (ligne 4, rouge et vert). Un remappage aurait signifié que ces broches
+sont partagées, et aurait invalidé à la fois le point de sonde UART et la table RGB.
 | handshake | `P0.2` | mis à 0 avant chaque trame, relâché à la fin (optionnel, 3ᵉ voie) |
 
 ⚠️ **Correction** : une lecture antérieure de ce document décrivait le lien comme *half-duplex avec
