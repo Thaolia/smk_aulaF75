@@ -1857,9 +1857,67 @@ C'est le **pendant en lecture** du transfert fragmenté déjà identifié en ré
 sous-index 1, vers `g_settings_staging`). La liaison radio porte un protocole de lecture *et*
 d'écriture sur la zone de configuration, par blocs de 14 octets, avec numéro de séquence.
 
-> *Non résolu :* ce qui met `0x0D9E` à une valeur non nulle en premier lieu. Les trois écritures
-> repérables sont internes au séquenceur ; l'amorçage passe par un pointeur calculé, comme pour le
-> reste du bloc de configuration.
+#### Qui arme le séquenceur — résolu
+
+Les trois écritures que Ghidra listait étaient internes au séquenceur. Une recherche du motif
+`90 0d 9e` sur l'image entière en trouve **treize**, dont sept dans une plage que la liste de
+références ne couvrait pas : `0x0C4A`, `0x0D23`, `0x0D3E`, `0x0D58`, `0x0D72`, `0x0D8C`, `0x0DA6`.
+
+Ces adresses tombent **dans le corps de `euart0_parse`** — elles se terminent toutes par
+`ljmp 0x0F6A`, l'étiquette de sortie du parser. La fonction que Ghidra avait reconstruite ne
+couvrait simplement pas cette plage, donc aucun xref n'avait été enregistré.
+
+> **Ornière de méthode.** Une liste de références n'est complète que pour le code effectivement
+> désassemblé. Ici la recherche octet a rattrapé ce que le graphe de références manquait — comme
+> pour les pointeurs calculés, mais pour une raison différente : la plage était bien du code, elle
+> n'appartenait à aucune fonction.
+
+Six des sept sites sont un même bloc, au comptage près :
+
+```asm
+movx [0x02E2], #<n>      ; nombre de blocs a transferer
+movx [0x0D14], #0        ; numero de sequence, remis a zero
+movx [0x038E], #0        ; longueur de bloc, poids fort
+movx [0x038F], #14       ; longueur de bloc
+movx [0x0D9E], #<h>      ; arme le handler h
+ljmp 0x0F6A              ; sortie du parser
+```
+
+| Site | Handler | Opcode | Blocs | Octets/bloc | **Total** |
+| --- | --- | --- | --- | --- | --- |
+| `0x0C4A` | 1 | `0x05` | — | — | gabarit `0xB3DC` |
+| `0x0D10` | 2 | `0x41` | 36 | 14 | **504** |
+| `0x0D2B` | 3 | `0x42` | 27 | 14 | **378** |
+| `0x0D45` | 4 | `0x43` | 37 | 14 | **518** |
+| `0x0D5F` | 5 | `0x44` | 10 | 14 | **140** |
+| `0x0D79` | 6 | `0x49` | 35 | 14 | **490** |
+| `0x0D93` | 7 | `0x4A` | 1 | **2** | **2** |
+
+**Le total de l'opcode `0x42` vaut 378 octets — exactement la taille de la table de couleurs**
+(`XRAM 0x0152`–`0x02CB`) que le chemin d'écriture remplit, trame `0x08` sous-index 2. Les deux
+sens du protocole se recoupent sur la même structure, établis séparément.
+
+Les 504 octets de l'opcode `0x41` cadrent avec la page de profil de 512 octets en `0xD800`, à huit
+octets près.
+
+Et ce sont **les mêmes trois variables** — `0x02E2` (compte), `0x0D14` (séquence), `0x038F`
+(longueur) — que `euart0_parse` renseigne depuis les octets 3, 4 et 5 d'une trame `0x08` reçue.
+Selon le chemin, le clavier **répond** à un transfert demandé par l'hôte, ou **initie** le sien.
+
+La boucle est donc complète :
+
+```
+trame recue --> euart0_parse pose 0x02E2 / 0x0D14 / 0x038F / 0x0D9E
+                                  |
+                       tic suivant v
+                FUN_CODE_3901 : table de sauts sur 0x0D9E
+                                  |
+                                  v
+                cmd 0x08, opcode, 14 octets de flash, sequence incrementee
+                                  |
+                        0x0D9E remis a 0 --> branche de repos
+                                             (cmd 0x06 tous les 100 tics)
+```
 
 ##### `CODE:0xB3DC` — un gabarit, pas une chaîne
 
