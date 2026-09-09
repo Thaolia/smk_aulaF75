@@ -1754,6 +1754,67 @@ n'existent que sur la voie masque.
 
 *Ces deux lectures sont inférées de la position ; le contenu des enregistrements, lui, est lu.*
 
+#### `cl3/2` et `cl3/1` — la luminosité RGB
+
+Les deux entrées `08 03 02 00` et `08 03 01 00` de la rangée de fonction sont la classe d'action
+**3**, dont le handler est `0x8C0F`. Le C est sans ambiguïté :
+
+```c
+if (g_key_hid_usage != 0) goto rapport;     /* une entree porteuse d'usage saute tout ceci */
+switch (g_key_param) {                       /* b2 de l'enregistrement */
+  case 1:  if (brightness < tbl_max_brightness[effect]) brightness++;  break;   /* monter */
+  case 2:  if (brightness != 0)                          brightness--;  break;   /* descendre */
+  case 0:  brightness++; if (brightness > max) brightness = 0;          break;   /* cycler */
+}
+```
+
+Donc **`cl3/1` = luminosité +**, **`cl3/2` = luminosité −**, et le paramètre `0` cyclerait. Sur la
+rangée de fonction, ce sont les deux touches de luminosité du rétroéclairage.
+
+Atteindre une butée (0 ou le maximum) pose `0x2B.6` et charge `0x0D1B = 6` — un signal de fin de
+course, vraisemblablement le clignotement de confirmation.
+
+Ce handler **confirme trois lectures faites ailleurs**, par des chemins indépendants :
+
+1. le maximum vient bien de `tbl_max_brightness[effet]`, la table `0xA8D5` ;
+2. la persistance suit exactement l'aiguillage de l'offset 5 :
+
+```c
+if (g_settings_per_effect == 0) {
+    if (g_effect_family_sel == 0)  fx_params[effect].b0 = (b0 & 0x80) | brightness;
+    else                           [0x0362 + effect]    = brightness;
+} else                             g_global_brightness  = brightness;
+```
+
+3. et le masque `0x80` de cette écriture **préserve le bit 7 de `b0`** — le drapeau de sens dont
+   j'avais déduit l'existence à la lecture (`rlc a ; mov 0x24.3, c`). L'écriture le confirme :
+   c'est bien un champ séparé, conservé au fil des changements de luminosité.
+
+> Une nuance : la lecture masque `b0 & 0x1F`, l'écriture n'en préserve que le bit 7 et laisse donc
+> sept bits utiles. La luminosité étant bornée à 9, la différence ne se voit jamais.
+
+### Ce qui reste ouvert sur EUART0
+
+Le sous-système est couvert de bout en bout : registres, débit, ISR, les deux handshakes, les
+onze commandes émises, les trois types de trame reçue, le protocole interne de la commande `0x08`,
+son séquenceur et la carte de relecture de la flash.
+
+> **Correction d'une note ancienne.** Mes premières notes annonçaient quatre types de trame
+> dispatchés : `0x02`, `0x03`, `0x08` et `0x15`. Le `0x15` n'existe pas : c'est
+> `xrl a,#0x15 ; orl a, r6`, la borne d'une boucle 16 bits de **21 octets** — la portée de la
+> somme de contrôle. L'octet 0 de la trame n'est comparé qu'en deux endroits, `0x060E` (`0x02`) et
+> `0x0778` (`0x03`), le reste tombant dans la branche `0x08`.
+
+Restent, par ordre décroissant d'intérêt :
+
+| Point | Ce qu'on sait |
+| --- | --- |
+| Passage en mode 2,4 GHz | aucune écriture directe de la valeur 1 dans `g_transport` |
+| Trame reçue `0x03` | pose `0x2C.3`, efface `0x0150`, répond — sens non établi |
+| Paramètres `0xF0` / `0xF1` de `euart0_reply` | deux appels depuis le parseur, valeurs non interprétées |
+| Opcode `0x4A` | un bloc de 2 octets, charge **remplie de zéros** par `0x3CF9` — probablement une fin de transfert |
+| Handlers 8, 9, 10 du séquenceur | `0x3D25` et `0x3D1D`, n'émettent aucun opcode |
+
 ### Ce que le décompilateur ajoute sur `euart0_parse`
 
 Le firmware a été rechargé dans **Ghidra 12.1.3** (`8051:BE:16:default`), avec l'espace `EXTMEM`
