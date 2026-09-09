@@ -1777,6 +1777,104 @@ euart0_cmd08();
 Le site `0x393E`, lui, pose `[35] = 0x13, [36] = 5, [37] = 1, [39] = 0x0A` puis copie dix octets
 depuis `CODE:0xB3DC` — même enveloppe, sous-message différent.
 
+#### Les sous-codes de la commande `0x08`
+
+Trois sont identifiés, tous adressés par `IDATA[0x3A]`.
+
+| Sous-code | Charge | Déclencheur |
+| --- | --- | --- |
+| `3` | modèle en `CODE:0xB3DC` | site `0x393E` |
+| `5` | pourcentage de batterie (`0x0C36`) + drapeaux | `0x2B.2`, depuis `hid_report_radio` |
+| `7` | `g_settings[0]` | `0x2B.5`, **une seule fois au démarrage** |
+
+##### `CODE:0xB3DC` — un gabarit, pas une chaîne
+
+Le site `0x393E` compose l'enveloppe puis recopie la table :
+
+```asm
+IDATA[0x35] = 0x13 ; [0x36] = 0x05 ; [0x37] = 0x01 ; [0x38] = 0 ; [0x39] = 0x0A
+r2 = 7
+boucle: IDATA[0x33 + r2] = CODE[0xB3DC + r2] ; r2++  jusqu'a r2 == 17
+```
+
+L'indice de départ compte : `IDATA[0x33 + 7]` vaut `IDATA[0x3A]`, **la case du sous-code**. La
+table n'est donc pas une chaîne de dix caractères — c'est un **sous-message pré-composé** :
+
+```
+idx  0  1  2  3  4  5  6 | 7  | 8  9 10 11 12 13 14 15 16
+     ff 00 ff ff ff ff ff| 03 | 00 00 00 00 cd 01 00 00 00
+                          ^sous-code    ^
+```
+
+Sous-code **3**, charge `00 00 00 00 CD 01 00 00 00`. Les sept premiers octets ne sont jamais lus
+par ce site.
+
+> *À noter, sans le conclure :* l'octet `0xCD` en cinquième position de la charge est aussi
+> l'identifiant interne que le driver OpenRGB associe à l'AULA F75
+> (`{ 0xCD, { "AULA F75", aula_f75_layout } }`). Mais `0xCD` **n'apparaît nulle part ailleurs
+> comme immédiat** dans l'image, et cette table n'a qu'un seul lecteur : rien dans le code ne relie
+> les deux. C'est une coïncidence à vérifier, pas un fait.
+
+##### Le sous-code `7` est un envoi unique au démarrage
+
+`0x2B.5` n'est posé qu'à un seul endroit — `vec.reset`, en `0x917B` :
+
+```asm
+jb    0x2B.1, suite
+lcall settings_restore        ; 0xA283
+setb  0x2A.1
+clr   0x2C.2
+setb  0x2B.5                  ; <-- arme l'envoi du sous-code 7
+```
+
+Il est armé **juste après la restauration des réglages depuis la flash**, et effacé par celui des
+deux transports qui l'émet le premier (`hid_report_radio` en `0x47B0`, `hid_report_usb` en
+`0x6BDD`). Au démarrage, une fois ses réglages relus, le clavier les annonce **une fois** au module
+radio.
+
+### Le clavier a dix profils de remap en flash
+
+La charge du sous-code 7 est `g_settings[0]`, c'est-à-dire l'**offset 0** du bloc de réglages —
+le champ le plus référencé du bloc (20 sites) et le seul que je n'avais pas identifié. Le C le
+donne :
+
+```asm
+a = [0x030D]
+add  a, a                     ; x 2
+DPL = 0
+DPH = 0xD8 + a                ; DPTR = 0xD800 + index x 512
+...
+mov  B, #4                    ; puis indexe par l'evenement x 4
+```
+
+**`DPTR = 0xD800 + index × 512`**, puis un décalage de `événement × 4` : c'est exactement la forme
+du descripteur de remap de quatre octets. `XRAM 0x030D` est donc un **index de profil**, et chaque
+profil occupe une page de 512 octets à partir de `0xD800`.
+
+| Profil | Adresse | Page | Octets non nuls |
+| --- | --- | --- | --- |
+| 0 | `0xD800` | 108 | 2 |
+| 1 | `0xDA00` | 109 | 2 |
+| 2–9 | `0xDC00`–`0xEBFF` | 110–117 | **0** |
+
+**La fin du profil 9 tombe sur `0xEBFF` — exactement la borne haute de la zone IAP.** Cette borne
+avait été établie indépendamment, par le `subb a, #0x76` de `iap_erase` qui rejette les pages
+au-delà de 117. Les deux se rejoignent au bit près : la zone réinscriptible est dimensionnée pour
+**page de réglages + palettes + keymap de base + dix profils**, sans un octet de rab.
+
+Le chemin profil est gardé par l'**offset 22** du bloc (`XRAM 0x0323`) :
+
+```asm
+mov dptr, #0x0323 ; movx a, @dptr ; jz  ...   ; si 0 -> on saute le profil
+```
+
+Dans le dump, offset 0 et offset 22 valent tous deux `0x00`, et huit des dix pages sont vierges :
+**aucun profil n'est configuré**, et c'est la table de remap de base en `0xCE00` qui s'applique.
+
+> *Inféré :* que ces pages soient des tables de remap. *Établi :* l'adressage
+> `0xD800 + n × 512 + événement × 4`, la coïncidence exacte avec la borne IAP, et le fait que le
+> chemin soit désactivé sur cet exemplaire.
+
 ### La trame d'état reçue — `02 06 …`
 
 C'est la branche `octet[0] == 2` de `euart0_parse`, la seule qui restait à lire. Elle est gardée
