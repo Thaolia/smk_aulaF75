@@ -400,6 +400,36 @@ AF7D  "AULA-F75 5.0 KB "
 **Les deux noms d'annonce Bluetooth du clavier**, 16 caractères chacun, complétés par une espace.
 Le paramètre `[2]` choisit lequel — d'où les deux appels depuis `main()`.
 
+#### La zone de données `0xAF6D` – `0xAF98`
+
+Bloc entièrement délimité : le code reprend en `0xAF99`. **Quatre lecteurs**, tous identifiés par
+leurs chargements DPTR.
+
+| Adresse | Taille | Contenu | Lu par |
+| --- | --- | --- | --- |
+| `0xAF6D` | 16 o | `"AULA-F75 3.0 KB "` | `0xA321` — commande `0x09` |
+| `0xAF7D` | 16 o | `"AULA-F75 5.0 KB "` | `0xA348` — commande `0x09` |
+| `0xAF8D` | 12 o | `20, 10, 5, 2, 2, 2, 2, 2, 2, 2, 2, 2` | `0x808C` et `0x8114` |
+
+La table de 12 octets est une **courbe d'accélération à seuil dégressif** :
+
+```asm
+mov  B, #0x0A ; div ab      ; index = (valeur - X) / 10
+mov  dptr, #0xaf8d ; movc   ; seuil = table[index]
+movx a, @dptr               ; compteur (XRAM 0x08C5, ou 0x08DC pour l'autre lecteur)
+clr c ; subb a, r7 ; jc     ; compteur < seuil -> sortie
+clr a ; movx @dptr, a       ; sinon remise a zero
+inc  0x17                   ; et avance d'un cran
+```
+
+Il faut **20 passages pour le premier cran, puis 10, puis 5, puis 2** indéfiniment. Deux compteurs
+distincts (`0x08C5` et `0x08DC`) partagent la même courbe. Ce qu'elle pilote au final n'est pas
+établi — il faudrait suivre les consommateurs de `IDATA 0x17`.
+
+*Note : les octets `30 67 27 c2 67 53 a9 fe` qui suivent la table ne sont pas des données mais du
+**code** — `30 67 27` désassemble en `jnb 0x2c.7, 0xafc3`, début de `fcn.0000AF99`. Ils
+ressemblaient à une adresse MAC Bluetooth ; ils n'en sont pas.*
+
 #### Autres commandes repérées
 
 | Cmd | Où | Forme | Interprétation |
