@@ -452,6 +452,82 @@ Conclusion : le firmware du BK3632 réside **dans le BK3632**. Pour l'obtenir il
 la puce (voie B ci-dessous), et pour comprendre le protocole il vaut mieux écouter le lien
 (voie A).
 
+### Réception : parser et format des réponses
+
+La réception se fait en **deux étages**.
+
+**1. L'ISR ne fait que signaler.** À la fin de l'ISR du tick (`0x7444`) :
+
+```asm
+jnb  0x24.4, ...   ; drapeau materiel « donnees recues », pose par l'ISR EUART0
+clr  0x24.4        ; acquitte
+setb 0x2d.7        ; drapeau de traitement differe
+```
+
+**2. `fcn.000005EA` traite hors interruption** (`0x05F3`) :
+
+```asm
+clr   0x2d.7                 ; acquitte
+mov   r1, #0x54              ; source : buffer RX en IDATA 0x54
+mov   r7, #0x17              ; 23 octets
+lcall fcn.00004c4b           ; copie vers XDATA 0x0120
+mov   r0,#0x70 ; mov a,@r0   ; index d'ecriture RX
+```
+
+**Les trames reçues sont donc analysées en XDATA `0x0120`.**
+
+#### Format d'une réponse
+
+```
+[0] = 0x02        en-tete de REPONSE   (les commandes emises utilisent 0x01)
+[1] = commande    ex. 0x06
+[2] = statut / parametre
+[3..8] = donnees
+[9] = checksum
+```
+
+**Checksum vérifié** (`0x0650`) :
+
+```asm
+clr  c
+mov  a, #0x55
+subb a, 0x08        ; 0x55 - somme(octets 0..8)
+mov  dptr,#0x0129 ; movx a,@dptr   ; octet [9]
+xrl  a, 0x08 ; jz                  ; sinon la trame est rejetee
+```
+
+→ **`checksum = 0x55 − Σ(octets 0..8)`**, trames de **10 octets**.
+
+Après validation, les champs sont dispatchés : `[4]` → XRAM `0x09BA`, `[5]` → XRAM `0x09AC`,
+`[7]` → chaîne passant par `0x02E6`.
+
+#### Plusieurs types de trames
+
+L'octet `[0]` est dispatché sur **`0x02`, `0x03`, `0x08` et `0x15`** (`0x0612`, `0x077D`, `0x0797`,
+`0x07BD`). L'octet `[2]` est ensuite testé contre `0x08`, `0x05`, `0x40`.
+
+Pour le type `0x03` : pose `0x2C.3`, met XRAM `0x0150` à 0, appelle `fcn.0000ACE6` avec `r7 = 0xF0`,
+puis charge `IDATA 0x18 = 0x06` et `IDATA 0x17 = 0xFF`.
+
+#### 🔑 Le sans-fil pilote le RGB
+
+Dans la branche autour de `0x07D5`-`0x07FC`, le parser lit les octets **`[3]`, `[4]`, `[5]`** de la
+trame reçue, puis écrit :
+
+```asm
+0x07f0   mov dptr,#0x038e ; clr a ; movx @dptr,a    ; 0x038E = 0
+0x07f5   inc dptr ; mov a,r5 ; movx @dptr,a         ; 0x038F = r5
+0x07f8   mov a,r7 ; swap a ; anl a,#0x0f            ; quartet haut
+0x07fc   mov dptr,#0x038d ; movx @dptr,a            ; 0x038D = sous-index d'effet
+```
+
+**`0x038D` est le sous-index d'effet RGB** (voir la chaîne de sélection plus haut). Une trame venue
+du BK3632 peut donc **changer l'effet lumineux**. Autrement dit, le chemin sans-fil relaie de la
+configuration vers le 8051 — vraisemblablement depuis une application hôte via Bluetooth ou le
+dongle 2,4 GHz.
+
+C'est la troisième source d'effet, à côté des touches Fn et du chemin USB.
+
 ### Grammaire des trames — établie
 
 Le format est décodé, et une commande l'est sémantiquement.
