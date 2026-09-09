@@ -1777,15 +1777,89 @@ euart0_cmd08();
 Le site `0x393E`, lui, pose `[35] = 0x13, [36] = 5, [37] = 1, [39] = 0x0A` puis copie dix octets
 depuis `CODE:0xB3DC` — même enveloppe, sous-message différent.
 
-#### Les sous-codes de la commande `0x08`
+#### La structure interne de la commande `0x08`
 
-Trois sont identifiés, tous adressés par `IDATA[0x3A]`.
+> **Correction.** J'ai d'abord présenté `IDATA[0x3A]` comme « le sous-code ». C'est faux : `0x3A`
+> est le **premier octet de charge**. Le discriminant est `IDATA[0x36]`, et `IDATA[0x35]` n'est pas
+> un marqueur mais une **longueur** — `0x13` = 19, exactement le nombre d'octets que
+> `euart0_cmd08` additionne (`IDATA 0x35..0x47`).
 
-| Sous-code | Charge | Déclencheur |
+```
+[0x34] = 0x08            commande
+[0x35] = 0x13 = 19       longueur de la charge
+[0x36] = opcode          <-- le discriminant
+[0x37] = echo de 0x02E2  issu de l'octet 3 de la requete recue
+[0x38] = echo de 0x0D14  issu de l'octet 4 de la requete recue
+[0x39] = (n << 4) | 0x038F   quartet bas : la longueur demandee
+[0x3A .. 0x47]           charge, jusqu'a 14 octets
+[0x48] somme partielle   [0x49] somme de trame
+```
+
+Les octets 3 et 4 de la requête sont **renvoyés tels quels** : c'est un protocole
+requête/réponse apparié, pas un flux.
+
+| Opcode `[0x36]` | Charge | Émis par |
 | --- | --- | --- |
-| `3` | modèle en `CODE:0xB3DC` | site `0x393E` |
-| `5` | pourcentage de batterie (`0x0C36`) + drapeaux | `0x2B.2`, depuis `hid_report_radio` |
-| `7` | `g_settings[0]` | `0x2B.5`, **une seule fois au démarrage** |
+| `0x05` | gabarit `CODE:0xB3DC`, 10 o | handler 1 |
+| `0x0A` | premier octet = 5 (batterie) ou 7 (réglages) | `hid_report_radio` |
+| `0x41` | 14 o depuis `CODE:0xD800` | handler 2 |
+| `0x42` `0x43` `0x44` | 14 o depuis une base de la zone IAP | handlers 3, 4, 5 |
+| `0x49` `0x4A` | idem | handlers 6, 7 |
+
+L'opcode `0x0A` porte donc bien un second niveau dans son premier octet de charge — c'est là que
+vivent le 5 (batterie) et le 7 (réglages au démarrage). Les autres opcodes n'en ont pas.
+
+#### Le séquenceur `0x3901`
+
+Les sept handlers sont les entrées d'une table de sauts, choisie par `XRAM 0x0D9E` :
+
+```c
+if ((0x0D9E - 1) > 9) { /* repos */ }
+else jump  CODE[0x391C + (0x0D9E - 1) * 3];
+```
+
+Dix entrées de trois octets en `0x391C` :
+
+| `0x0D9E` | Handler | Opcode émis |
+| --- | --- | --- |
+| 1 | `0x393A` | `0x05` |
+| 2 | `0x3975` | `0x41` |
+| 3 | `0x3A25` | `0x42` |
+| 4 | `0x3AB5` | `0x43` |
+| 5 | `0x3BA7` | `0x44` |
+| 6 | `0x3C42` | `0x49` |
+| 7 | `0x3CD0` | `0x4A` |
+| 8, 9 | `0x3D25` | — |
+| 10 | `0x3D1D` | — |
+
+**La branche de repos (`0x0D9E == 0`) est celle qui entretient la liaison** : elle incrémente un
+compteur (`0x0150`) et, tous les cent tics, émet `euart0_cmd06` — la requête d'état dont j'ai
+décodé la réponse plus haut. Après trois passages, elle relâche le handshake :
+
+```c
+if (++counter > 99) {
+    counter = 0;
+    euart0_cmd06();
+    if (++DAT_INTMEM_30 > 2) { DAT_INTMEM_30 = 0; _c_1 = 0; P0CR &= 0xFB; P0_2 = 1; }
+}
+```
+
+Les handlers se **chaînent** en réécrivant `0x0D9E` (`0x3CCE`, `0x3CD4`) et le remettent à zéro en
+fin de service (`0x393E`) : une requête déclenche une rafale de réponses, une par tic.
+
+#### Ce que la charge contient
+
+Le pointeur de charge vit dans `XRAM 0x0139:0x013A` et reçoit `0xD000`, `0xD400` ou `0xD800` selon
+le handler — **des pages de la zone IAP**. Le firmware renvoie donc, quatorze octets à la fois, le
+contenu de sa flash de configuration.
+
+C'est le **pendant en lecture** du transfert fragmenté déjà identifié en réception (trame `0x08`,
+sous-index 1, vers `g_settings_staging`). La liaison radio porte un protocole de lecture *et*
+d'écriture sur la zone de configuration, par blocs de 14 octets, avec numéro de séquence.
+
+> *Non résolu :* ce qui met `0x0D9E` à une valeur non nulle en premier lieu. Les trois écritures
+> repérables sont internes au séquenceur ; l'amorçage passe par un pointeur calculé, comme pour le
+> reste du bloc de configuration.
 
 ##### `CODE:0xB3DC` — un gabarit, pas une chaîne
 
