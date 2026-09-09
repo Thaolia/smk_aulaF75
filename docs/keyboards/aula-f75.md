@@ -591,8 +591,8 @@ Double boucle sur toute la matrice : `0x0EE2` = colonne **0..14**, `0x0EE3` = li
 | Tableau | Adresse | Contenu |
 | --- | --- | --- |
 | masque d'exclusion | `0x0BFF + colonne` | un octet par colonne ; la touche est traitée si le bit `1 << ligne` est **à zéro** |
-| couleur par touche | `0x0428 + colonne × 18 + ligne × 3` | trois octets — 15 × 6 × 3 = 270 o |
-| intensité par touche | `0x0C17 + colonne × 6 + ligne` | un octet — 90 o |
+| couleur par touche | `0x0428 + colonne × 18 + ligne × 3` | trois octets ; **378 o alloués** (21 × 18), `0x0428`–`0x05A1` |
+| intensité par touche | `0x0C17 + colonne × 6 + ligne` | un octet ; **126 o alloués** (21 × 6) |
 
 Pour chaque touche retenue :
 
@@ -611,6 +611,11 @@ fois plus vite. Le `>> 5` fait de l'intensité une échelle sur **32 niveaux**.
 
 Les trois tableaux ne sont atteints que par pointeur calculé : `dptr_refs` sur `0x0428`, `0x0C17`
 ou `0x0BFF` ne renvoie **rien**. Ils n'ont été trouvés que par la décompilation.
+
+> **Taille corrigée.** J'avais annoncé 270 et 90 octets, d'après la boucle de `0x64F1` qui ne
+> parcourt que quinze colonnes. L'allocation réelle en fait **vingt et une**, comme la table LED :
+> `rgb_clear_key_state` (`0x9078`) les efface toutes deux jusqu'à `0x15`. Le tampon couleur finit
+> donc en `0x05A1`, **juste avant** le tampon de trame PWM en `0x05A2` — les deux sont contigus.
 
 #### `0x7C12` — le dégradé défilant (effet d'indice 2)
 
@@ -741,6 +746,76 @@ phase 160  ->  R=248 G=  0 B=255     magenta
 Six segments de 32 pas, et **les 192 entrées ont toutes un maximum de 255** — saturation constante,
 la signature d'une roue de teintes. Avec un pas de 11 par colonne, les quinze colonnes couvrent
 165 des 192 phases : le dégradé fait presque un tour complet sur la largeur du clavier.
+
+### Les deux autres moteurs — `0xEE6A` et `0x746A`
+
+#### `0xEE6A` — l'effet d'indice 0 est l'extinction
+
+Douze octets, deux appels :
+
+```asm
+0xEE6A  clr a ; mov r3,a ; mov r5,a ; mov r7,a
+0xEE6E  lcall rgb_fill_solid        ; (0, 0, 0)
+0xEE71  clr a ; mov r7,a
+0xEE73  ljmp  rgb_clear_key_state   ; (0)
+```
+
+**`rgb_fill_solid` (`0xADA2`)** prend un triplet dans `r7`/`r5`/`r3`, le pose en `0x0EE3`–`0x0EE5`,
+puis balaie **21 colonnes × 6 lignes** et écrit chaque position via `rgb_key_suppressed` puis la
+chaîne d'écriture (`0x7631`). Elle remet `RSTSTAT` (SFR `0xB1`) à zéro **à chaque itération** — un
+coup de chien de garde, la boucle de 126 positions étant assez longue pour en avoir besoin. Huit
+autres sites l'appellent, tous groupés en `0x8736`–`0x8785` : ce sont les couleurs fixes des
+touches-témoins.
+
+**`rgb_clear_key_state` (`0x9078`)** écrit son argument dans les **deux tableaux du moteur
+réactif** — les trois octets de couleur en `0x0428 + col × 18 + ligne × 3` et l'intensité en
+`0x0C17 + col × 6 + ligne` — sur 21 colonnes et 6 lignes.
+
+> Donc l'effet d'indice 0 **n'anime rien** : il éteint la table LED et remet à zéro l'état du
+> moteur réactif, toutes les 100 trames. C'est le mode « rétroéclairage coupé », réaffirmé
+> périodiquement plutôt que posé une fois.
+
+#### `0x746A` — l'onde concentrique
+
+Appelée avec `r7 = [0x08C3]`, le rayon, que le gestionnaire d'indice 1 incrémente à chaque trame et
+**borne à 9**. Ce rayon devient la borne de la boucle externe : `[0x0EE3]` va de 0 à `rayon − 1`.
+
+Chaque tour lit un **groupe** de la table `CODE 0x2959`, treize octets par groupe, `0xFF` = case
+vide. Les valeurs sont des positions **empaquetées `colonne × 8 + ligne`** — le même codage que la
+carte `0xC500`.
+
+| Groupe | Positions | Lecture |
+| --- | --- | --- |
+| 0 | 1 | `c7,l2` — **le centre** |
+| 1 | 6 | la couronne immédiate |
+| 2 | 11 | |
+| 3–7 | 11 à 13 | |
+| 8 | 12 | le bord |
+
+Neuf groupes, `0x2959`–`0x29CD`. **C'est une onde qui part du centre du clavier** (colonne 7,
+ligne 2) et gagne une couronne par trame jusqu'au bord. La phase de la roue de teintes avance de
+**13 par couronne**, ce qui colore chaque anneau différemment.
+
+Les deux tables `CODE 0x2DED` et `CODE 0x2F6B`, indexées `(v & 7) × 21 + (v >> 3)`, sont les mêmes
+que celles de `0x7C12` — la conversion position → coordonnées passées à `rgb_key_suppressed`.
+
+#### Les deux moteurs ne lisent pas la roue dans le même ordre
+
+Vérifié au désassemblage des deux côtés :
+
+| Fonction | `+0` | `+1` | `+2` | Ordre |
+| --- | --- | --- | --- | --- |
+| `0x746A` (`0x74AD`, `0x74C2`, …) | `0x011D` | `0x0000` | `0x0E25` | **(R, G, B)** |
+| `0x7C12` (`0x7CA4`, `0x7CB9`, `0x7CD1`) | `0x0E25` | `0x0000` | `0x011D` | **(B, G, R)** |
+
+Leurs branches *palette* sont pourtant **identiques** — les deux rangent `+0` dans `0x011D`
+(`0x7508` et `0x7C4F`). Seule la branche roue diverge.
+
+> Deux lectures possibles : soit c'est délibéré et l'un des deux effets affiche l'arc-en-ciel
+> avec rouge et bleu échangés, soit c'est une étourderie du firmware d'origine. **Le dump ne
+> permet pas de trancher** — il faudrait voir les deux effets tourner. Je le signale parce que
+> quiconque réimplémente ces effets reproduira l'un ou l'autre sans le savoir.
+
 
 #### `0x0EE4` n'est pas un drapeau partagé
 
