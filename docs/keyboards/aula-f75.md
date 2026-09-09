@@ -275,6 +275,34 @@ sélection — « une commande reçue sur la Mode Selecting Pin au démarrage »
 dans ce datasheet abrégé. Mais la formulation recoupe exactement ce qu'on sait déjà : sur BK7231 on
 spamme `0xD2` en SPI pendant le reset, et le BIM attend un `LINK_CHECK` en UART.
 
+### ⚠️ Le verrou possible : chiffrement et interfaces condamnables
+
+Section 3.8 du datasheet, « Code Encryption and System Security » :
+
+> « There is one times NVM for code encryption and system security. Each unit can have different
+> password for code encryption, where hardware will do the decryption automatically.
+> **The download and debug interface could be closed permanently by user** to keep system security.
+> […] Once the access right is changed, **no roll back is possible** to provide permanent security
+> of the system. »
+
+Trois conséquences, et elles priment sur tout ce qui précède :
+
+1. **La flash peut être chiffrée**, avec un mot de passe par unité et déchiffrement matériel à la
+   volée. Un dump réussi pourrait ne livrer que du chiffré.
+2. **Les interfaces de téléchargement ET de debug peuvent être condamnées définitivement** par le
+   fabricant, via une NVM one-time (type eFUSE). Cela fermerait d'un coup l'UART, le JTAG et le SPI.
+3. **C'est irréversible.**
+
+**On ne sait pas si Aula/SinoWealth a verrouillé le BK3632 de ce clavier.** Cela ne se détermine
+qu'en essayant.
+
+La bonne nouvelle : le test est **peu coûteux et non destructif**. Un adaptateur USB-TTL sur
+`GPIOA[0]`/`GPIOA[1]`, une trame `01 E0 FC 01 00` (LINK_CHECK) répétée pendant un reset, et on sait.
+Silence = probablement verrouillé, ou mauvaise séquence d'entrée. Réponse = la voie est ouverte.
+
+Beaucoup d'appareils grand public bon marché ne prennent pas la peine de verrouiller. Mais tant que
+ce n'est pas testé, **la voie B reste hypothétique, indépendamment de l'outillage**.
+
 ### Déduit du BK3432, son proche parent — **pas le même composant**
 
 Le SDK BK3432 (`Cdreamyao/tuya_ble_sdk_Demo_Project_bk3432`) donne, en source primaire :
