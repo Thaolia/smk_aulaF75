@@ -592,7 +592,7 @@ Double boucle sur toute la matrice : `0x0EE2` = colonne **0..14**, `0x0EE3` = li
 | --- | --- | --- |
 | masque d'exclusion | `0x0BFF + colonne` | un octet par colonne ; la touche est traitée si le bit `1 << ligne` est **à zéro** |
 | couleur par touche | `0x0428 + colonne × 18 + ligne × 3` | trois octets ; **378 o alloués** (21 × 18), `0x0428`–`0x05A1` |
-| intensité par touche | `0x0C17 + colonne × 6 + ligne` | un octet ; **126 o alloués** (21 × 6) |
+| intensité par touche | `0x0017 + colonne × 6 + ligne` | un octet ; **126 o alloués** (21 × 6) |
 
 Pour chaque touche retenue :
 
@@ -609,8 +609,14 @@ else                             if (intensité) intensité -= 1;
 l'intensité **décroît d'un cran par trame** — de deux crans pour l'effet 13, qui s'éteint donc deux
 fois plus vite. Le `>> 5` fait de l'intensité une échelle sur **32 niveaux**.
 
-Les trois tableaux ne sont atteints que par pointeur calculé : `dptr_refs` sur `0x0428`, `0x0C17`
+Les trois tableaux ne sont atteints que par pointeur calculé : `dptr_refs` sur `0x0428`, `0x0017`
 ou `0x0BFF` ne renvoie **rien**. Ils n'ont été trouvés que par la décompilation.
+
+> **Correction.** J'avais écrit `0x0C17` pour le tableau d'intensité. C'est **`0x0017`** :
+> `mul ab (b=6) ; add a,#0x17 ; clr a ; addc a,#0x00` — l'octet de poids fort est **nul**. Le `0x0C`
+> venait du masque d'exclusion voisin (`add a,#0xFF ; addc a,#0x0C`), qui lui est bien en `0x0BFF`.
+> Le `CONCAT11` du décompilateur écrit ces deux cas presque pareil ; seules les constantes du
+> désassemblage les séparent.
 
 > **Taille corrigée.** J'avais annoncé 270 et 90 octets, d'après la boucle de `0x64F1` qui ne
 > parcourt que quinze colonnes. L'allocation réelle en fait **vingt et une**, comme la table LED :
@@ -769,7 +775,7 @@ touches-témoins.
 
 **`rgb_clear_key_state` (`0x9078`)** écrit son argument dans les **deux tableaux du moteur
 réactif** — les trois octets de couleur en `0x0428 + col × 18 + ligne × 3` et l'intensité en
-`0x0C17 + col × 6 + ligne` — sur 21 colonnes et 6 lignes.
+`0x0017 + col × 6 + ligne` — sur 21 colonnes et 6 lignes.
 
 > Donc l'effet d'indice 0 **n'anime rien** : il éteint la table LED et remet à zéro l'état du
 > moteur réactif, toutes les 100 trames. C'est le mode « rétroéclairage coupé », réaffirmé
@@ -923,6 +929,95 @@ depuis les touches**, et l'effet 13 est sa version qui tourne toute seule.
 
 > Les quatre `+6` (`0x0007`, `0x0141`, `0x02EE`, `0x08CC`) tombent exactement à `base + 6` pour les
 > quatre bases : c'est le contrôle qui confirme la lecture des bases.
+
+### `0x60C9` et `0x6C9B` — la phase par touche et le dégradé par colonne
+
+#### L'outil commun : `fcn.0000EDA2`
+
+```asm
+0xEDA2  jnb 0x24.3, 0xEDAF
+        inc r5 ; si r5 >= r7 -> r5 = 0          ; sens avant
+0xEDAF  dec r5 ; si debordement -> r5 = r7 - 1  ; sens arriere
+```
+
+**Avance une valeur d'un pas, modulo `r7`, dans le sens que donne `0x24.3`.** C'est
+`rgb_scroll_step` appliqué à un octet quelconque au lieu de la position globale — et c'est le même
+bit de direction, donc le réglage utilisateur agit sur les deux.
+
+#### `0x60C9` — chaque touche a sa propre phase (effet d'indice 6)
+
+Cinq cent quarante et un octets. Double boucle 15 × 6, et pour chaque touche :
+
+```c
+phase = etat[0x0017 + col*6 + ligne];
+EDA2(phase, mode == 7 ? 0xC0 : 0x60);      /* avance d'un pas, module */
+etat[0x0017 + col*6 + ligne] = phase;
+g_scroll_pos = phase;
+couleur = (mode == 7) ? roue[phase]                     /* modulo 192 */
+                      : palette[fx][mode] puis gain(0x08C3);   /* modulo 96 */
+si position < 15 : rgb_key_suppressed(...) ; sinon rien
+    -> rgb_apply_brightness() ; ecriture par 0x7619
+```
+
+**Le tableau `0x0017` n'est donc pas « l'intensité » en général** : c'est un octet d'état par
+touche, dont le sens dépend de l'effet. `0x64F1` y range une intensité qui décroît ; `0x60C9` y
+range une phase qui tourne. Le même tableau, deux significations — comme `0x0EE4` plus haut.
+
+Résultat visuel : chaque touche parcourt la roue à son propre décalage, et toutes avancent d'un pas
+par trame. Un scintillement, pas un défilement.
+
+#### `0x6C9B` — dégradé par colonne (effet d'indice 11)
+
+Quatre cent cinquante-quatre octets, deux moitiés quasi identiques selon `0x011C` :
+
+```c
+rgb_scroll_step(mode == 7 ? 0xC0 : 0x60);   /* une seule fois */
+phase = g_scroll_pos;
+pour chaque colonne 0..14 :
+    couleur = (mode == 7) ? roue[phase] : palette[fx][mode] puis gain(phase);
+    phase += (mode == 7) ? 7 : 10;   avec repli sur 0xC0 / 0x60
+    rgb_apply_brightness();
+    pour chaque ligne 0..5 : si position < 15 -> 0x5968 puis, si non supprimee, 0x7616
+```
+
+C'est **la même famille que `0x7C12`** — une couleur par colonne, la phase avançant d'un pas fixe
+d'une colonne à l'autre — avec un pas différent :
+
+| Effet | Fonction | Pas par colonne | Modulo |
+| --- | --- | --- | --- |
+| 2 | `0x7C12` | 11 | 192 |
+| 11 | `0x6C9B` | 7 (roue) / 10 (palette) | 192 / 96 |
+
+Sur quinze colonnes : `0x7C12` couvre 165 phases sur 192, `0x6C9B` en couvre 105 — un dégradé plus
+serré, moins d'un tour complet.
+
+#### Au passage : l'échelle d'entrées de l'écriture de pixel
+
+`0x6C9B` n'appelle ni `rgb_key_suppressed` ni `rgb_pixel_write` directement, mais `0x5968` et
+`0x7616`. Ce ne sont pas d'autres routines : ce sont des **points d'entrée plus hauts dans les
+mêmes**.
+
+| Entrée | Ce qu'elle fait avant de tomber dans la suivante |
+| --- | --- |
+| `0x7616` | `mov dptr,#0x0EE4` — prend les coordonnées dans `0x0EE4`/`0x0EE5` |
+| `0x7619` | `movx a,@dptr ; inc dptr` — l'appelant a déjà posé `dptr` |
+| `0x761B` | `mov r7,a ; movx a,@dptr ; mov r5,a` |
+| `0x761E` | charge les trois composantes mises à l'échelle |
+| `0x7631` | ne charge que la troisième |
+| `0x7636` | le corps : bornes, adresse, écriture |
+
+Chaque appelant entre au niveau qui correspond à ce qu'il a déjà en main. C'est une économie de
+place classique en C51 — et c'est **pourquoi r2 découpe cette zone en une demi-douzaine de
+« fonctions » de deux ou trois octets** : ce sont des étiquettes d'entrée, pas des routines.
+Même explication pour `0x5968`, qui précède `rgb_key_suppressed` et lui prépare la coordonnée lue
+dans `CODE 0x2F6B`.
+
+#### Et la roue, encore
+
+`0x60C9` et `0x6C9B` lisent tous deux `+0` → `0x011D`, donc **(R, G, B)** — vérifié en `0x6CC3`.
+Cela fait **cinq** moteurs en `(R,G,B)` contre **un seul**, `0x7C12`, en `(B,G,R)`. L'hypothèse de
+l'étourderie du firmware prend nettement le dessus sur celle de l'arc-en-ciel volontairement
+inversé.
 
 ### `XRAM 0x009D` — index d'effet RGB
 
