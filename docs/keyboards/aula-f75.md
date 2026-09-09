@@ -1057,6 +1057,74 @@ Les deux moitiés sont structurellement identiques (blocs de 136 et 143 octets) 
 un unique bloc d'émission. C'est la seule des cinq entrées de `euart0.send` qui soit atteinte
 depuis la chaîne de rapport.
 
+### `XRAM 0x031B` — le transport actif
+
+**57 références** dans l'image : c'est la variable centrale du sous-système sans-fil. Trois
+valeurs seulement, `0`, `1` et `2`.
+
+#### Ce que la valeur commande
+
+| Site | Test | Effet quand `0x031B == 0` |
+| --- | --- | --- |
+| `usb.init` @ `0xEC00` | `jnz` | l'USB n'est initialisé (`USBADDR`) **que** dans ce cas |
+| `fcn.00006ACF` @ `0x6AD7` | `jz` | aucun rapport HID USB si la valeur est non nulle |
+| `isr.timer2` @ `0xA513` | `jz` | `euart0.parse` n'est appelé **que** si elle est non nulle |
+| `vec.reset` @ `0x9150` | `jnz` | sinon `anl IEN1,#0xBF` — l'IRQ EUART0 reste coupée |
+| `fcn.00001DC3` @ `0x1EFC` | `jnz` | l'hystérésis d'énergie ne tourne qu'en sans-fil |
+| `fcn.00003108` @ `0x310E` | `cjne #0x02` | en mode 2, un élément de plus à balayer (`inc 0x0E`) |
+
+> Précision à la section précédente : l'appel à `euart0.parse` dans `isr.timer2` a **deux**
+> gardes, pas une — `jb 0x2c.0` en `0xA504` et `jz` sur `0x031B` en `0xA513`, toutes deux vers
+> la même sortie `0xA51C`.
+
+#### Le retour au filaire — `fcn.000084E9` @ `0x8543`
+
+```asm
+clr   a
+movx  [0x031b], a       ; transport = 0
+anl   IEN1, #0xBF       ; coupe l'IRQ EUART0
+lcall usb.init          ; reinitialise l'USB
+```
+
+#### Le passage en Bluetooth — trois blocs identiques
+
+`0x41D4`, `0x420A`, `0x423F`, au numéro de slot près :
+
+```asm
+jnb 0x29.5, abandon ; jnb 0x2a.5, abandon
+a = [0x031B] ; xrl #0x02 ; jz suite     ; exige d'etre DEJA en mode 2
+a = [0x0319] ; xrl #0x0N ; jz fin       ; deja sur ce slot -> ne rien faire
+[0x031B] = 2
+[0x0319] = N            ; dec a / movx a / inc a, avec a = 2  ->  1, 2, 3
+orl  IEN1, #0x40        ; active l'IRQ EUART0
+anl  USBCON, #0x7F      ; coupe l'USB
+setb 0x27.7 ; setb 0x26.5
+```
+
+Le numéro de slot est produit par la seule différence entre les trois blocs : `dec a`, `movx a`,
+`inc a` appliqués à `a = 2`. Donc **`XRAM 0x0319` est le slot Bluetooth, 1 à 3**, et ces trois
+blocs sont les raccourcis de *changement de slot* — ils exigent le mode 2 et n'y font pas entrer.
+
+La symétrie avec le retour filaire est exacte : `IEN1.6` activé contre coupé, `USBCON.7` coupé
+contre `usb.init`.
+
+#### Mode 1
+
+`0x4276` exige `[0x031B] == 1`, remet à zéro un compteur 16 bits en `0x0961` et pose `0x2C.5` —
+un déclencheur, pas une entrée de mode. `euart0.parse` (`0x070E`) et `fcn.000084E9` (`0x8576`)
+traitent le mode 1 distinctement du mode 2, chacun avec son propre `xrl`.
+
+> *Inféré :* 0 = USB filaire, 1 = 2,4 GHz, 2 = Bluetooth — c'est la structure tri-mode habituelle
+> de ces claviers. *Établi :* trois valeurs ; le mode 2 porte un slot 1–3 ; le mode 0 est celui où
+> l'USB est initialisé et où le sans-fil est intégralement coupé.
+
+#### Un point ouvert, net
+
+**Aucune écriture directe de la valeur 1 dans toute l'image.** Les seules écritures de `0x031B`
+trouvées sont `= 2` (trois sites) et `= 0` (un site). Le mode 1 est donc rétabli par un autre
+chemin — bloc de réglages relu depuis la flash, ou écriture par pointeur calculé que la recherche
+sur `mov dptr, #0x031b` ne voit pas. À trancher.
+
 ### Réception : parser et format des réponses
 
 La réception se fait en **deux étages**.
