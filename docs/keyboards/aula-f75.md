@@ -259,6 +259,57 @@ Conclusion : le firmware du BK3632 réside **dans le BK3632**. Pour l'obtenir il
 la puce (voie B ci-dessous), et pour comprendre le protocole il vaut mieux écouter le lien
 (voie A).
 
+### Grammaire des trames — établie
+
+Le format est décodé, et une commande l'est sémantiquement.
+
+```
+[0] = 0x01        en-tête constant
+[1] = commande
+[2] = paramètre / sous-commande
+[3] = longueur de la charge utile
+[4..] = données
+```
+
+#### Commande `0x09` — définir le nom Bluetooth
+
+Construite en `fcn @ 0xA307`, appelée **deux fois depuis `main()`** (`0x9148` et `0x914D`) :
+
+```asm
+mov @r0,#0x01     ; [0] en-tête
+mov @r0,#0x09     ; [1] commande
+mov @r0,#0x01     ; [2] profil  (0x00 dans la branche alternative, selon r7)
+mov @r0,#0x10     ; [3] longueur = 16
+mov dptr,#0xaf6d  ; copie 16 octets depuis la flash
+```
+
+Et `0xAF6D` contient, en clair :
+
+```
+AF6D  "AULA-F75 3.0 KB "
+AF7D  "AULA-F75 5.0 KB "
+```
+
+**Les deux noms d'annonce Bluetooth du clavier**, 16 caractères chacun, complétés par une espace.
+Le paramètre `[2]` choisit lequel — d'où les deux appels depuis `main()`.
+
+#### Autres commandes repérées
+
+| Cmd | Où | Forme | Interprétation |
+| --- | --- | --- | --- |
+| `0x04` | `0xB084` | `01 04 <octet>` | un paramètre lu en XRAM `0x0EF6` |
+| `0x06` | `0xED41` | `01 06 00 00 00`, longueur 6 | charge nulle — sonde ou requête d'état ? |
+| `0x08` | `0xB09E` | longueur 23 | remplit depuis IDATA `0x48` |
+| `0x09` | `0xA307` | longueur 32 | **nom Bluetooth** (ci-dessus) |
+
+*Correction : une version antérieure de ce document attribuait `0x05` au site `0xED53`. C'est
+faux — `0xED53` est l'appel d'émission, et la trame qu'il envoie porte la commande `0x06`,
+construite juste avant en `0xED41`.*
+
+*Et la piste « HCI over UART » est écartée : le SDK BK3432 décrit bien un transport HCI pour son
+bootloader, mais `01 09 01 10` ne parse pas comme du HCI (l'opcode serait invalide). C'est un
+protocole propriétaire — dont la grammaire est maintenant connue.*
+
 ### Deux voies pour obtenir la sémantique
 
 #### A. Sniffer la liaison EUART0 — **recommandé, et SANS FLASHER**
