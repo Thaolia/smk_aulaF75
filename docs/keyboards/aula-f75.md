@@ -1678,6 +1678,117 @@ traitent le mode 1 distinctement du mode 2, chacun avec son propre `xrl`.
 > de ces claviers. *Établi :* trois valeurs ; le mode 2 porte un slot 1–3 ; le mode 0 est celui où
 > l'USB est initialisé et où le sans-fil est intégralement coupé.
 
+#### Résolu, complètement : ce qui fait entrer en 2,4 GHz
+
+Le point ouvert n°1 — « aucune écriture directe de la valeur 1 dans `g_transport` » — se referme,
+et pas seulement par le chemin du bloc persisté décrit plus bas. Il y a un **sélecteur matériel**,
+et il a sa propre routine.
+
+##### `fcn.000084E9` — le sélecteur à glissière, trois positions
+
+Appelée depuis `tick_slow` (`0x9074`). Elle échantillonne **deux broches** :
+
+```asm
+0x84E9  jb  0xF8.4, 0x84FE     ; 0xF8 = P7  ->  P7.4
+0x84FE  jb  0xB0.5, 0x8512     ; 0xB0 = P4  ->  P4.5
+```
+
+> Ghidra les nomme `F8_4` et `T1` : `T1` est le nom classique du bit `0xB0.5` quand `0xB0` est pris
+> pour `P3`. C'est encore le piège de la carte SFR — sur ce MCU `0xB0` est `P4`.
+
+| `P7.4` | `P4.5` | Position | Compteur |
+| --- | --- | --- | --- |
+| 1 | 1 | **filaire** | `0x08BD` |
+| 1 | 0 | **Bluetooth** | `0x0960` |
+| 0 | — | **2,4 GHz** | `0x02DF` |
+
+Chaque position a son compteur ; les deux autres sont remis à zéro à chaque passage. **Dix
+passages consécutifs** déclenchent la bascule. C'est un anti-rebond, pas un temporisateur.
+
+Ces deux broches figuraient parmi les entrées « rôle inconnu » de l'init GPIO d'usine. Il en reste
+sept : `P0.0`, `P0.1`, `P0.5`, `P0.6`, `P4.1`, `P4.4`, `P7.7`.
+
+##### Les trois branches
+
+```c
+/* 2,4 GHz */
+if (g_transport == 0) { setb 0x27.7; delay(20); }   /* 0xEF8D */
+g_transport = 1;
+IEN1 |= 0x40;                                       /* 0xEF40 */
+rf_link_select(0, 0);                               /* <<< slot 0 */
+
+/* Bluetooth */
+g_transport = 2;
+if (g_bt_slot < 1 || g_bt_slot > 3) g_bt_slot = 1;
+IEN1 |= 0x40;
+rf_link_select(g_bt_slot, 0);
+
+/* filaire */
+setb 0x27.7; delay(20);
+rf_notify_wired();                                  /* 0xEED1 */
+g_transport = 0;
+IEN1 &= 0xBF;
+usb_init();
+delay(200);
+```
+
+`fcn.0000EED1` est la politesse de sortie : **commande `0x0E`**, dix millisecondes, **commande
+`0x0B` avec le paramètre 0**, dix millisecondes.
+
+##### `fcn.0000EF5A` → `fcn.0000ED89` — la commande qui choisit la radio
+
+```asm
+0xED89  jb  0x2c.1, ret        ; pas d'emission en cours
+0xED8C  jnb P4.7,   ret        ; module pret
+        IDATA[0x33] = 0x01     ; en-tete
+        IDATA[0x34] = 0x01     ; commande
+        IDATA[0x35] = R7       ; slot
+        IDATA[0x36] = R5       ; drapeau
+0xED9E  lcall euart0_send      ; six octets
+```
+
+Soit sur le fil :
+
+```
+01 01 <slot> <drapeau> 00 <0x55 - somme>
+```
+
+**Le slot est l'encodage radio, et il ne vaut pas celui de `g_transport`** :
+
+| Slot | Radio |
+| --- | --- |
+| `0` | **dongle 2,4 GHz** |
+| `1` `2` `3` | Bluetooth, emplacements 1 à 3 |
+
+La preuve tient en trois lignes de `tick_slow_wireless` (`0x870C`) :
+
+```c
+if (g_transport == 2)      slot = g_bt_slot;
+else if (g_transport == 1) slot = 0;
+else                       /* rien */;
+rf_link_select(slot, 1);
+```
+
+En mode 1, le seul slot possible est **0**. Et l'entrée en mode 1 de `fcn.000084E9` appelle
+`rf_link_select(0, 0)` en dur. Les deux sites se recoupent.
+
+> **Attention à la collision d'encodages.** `g_transport` vaut 0 pour *filaire* ; le slot vaut 0
+> pour *2,4 GHz*. Les deux champs se croisent sur la valeur la plus dangereuse. Le portage SMK
+> définit deux types distincts pour cette raison.
+
+Le second argument vaut **0** à l'entrée dans un mode et **1** depuis le tic lent, sur le bit
+`0x2C.5` que pose le raccourci d'appairage (`0x4287`). D'où la lecture « 1 = relancer
+l'appairage » — cohérente avec les deux sites, mais c'est leur seule différence : *inféré*.
+
+##### `fcn.0000870C` — le tic lent sans-fil
+
+Trois actions temporisées, dont deux nouvelles :
+
+- **`0x2B.7`** → réinitialisation d'usine : `settings_save`, puis une séquence de clignotements
+  **bleu, vert, rouge** de 200 ms chacun via `rgb_fill_solid`. C'est le retour visuel du reset.
+- **`0x2C.5`** → réaffirmation du lien, ci-dessus.
+- un compteur d'environ trente-deux passages → **commande `0x04` avec le paramètre 3**.
+
 #### Résolu : `0x031B` est un champ d'un bloc de réglages persisté
 
 Le point resté ouvert — « aucune écriture directe de la valeur 1 » — a une explication nette :
