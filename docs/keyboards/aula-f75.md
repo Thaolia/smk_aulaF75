@@ -721,6 +721,66 @@ l'ordre et le contexte. Le firmware maison permet d'*interroger* le BK3632 libre
 des commandes que l'usine n'émet jamais. Commencer par la sonde externe reste plus sage : elle
 donne la vérité de terrain sans rien risquer.
 
+#### La voie ICP du BYK916 de référence — **ne s'applique PAS au F75**
+
+Les notes de reverse [`swiftgeek/hykker-re`, issue #4](https://github.com/swiftgeek/hykker-re/issues/4)
+documentent les conventions du BYK916 et signalent une piste séduisante :
+
+> `CSNA` / `CLKA` / `MOSIA` / `MISOA` — SPI/JTAG interface for BK3632, **could be used for ICP/ISP of
+> flash in BK3632**.
+
+Sur la conception de référence, le 8051 est donc câblé au BK3632 par SPI, ce qui offrirait un accès
+ICP tout fait. **Vérifié sur ce clavier : ce n'est pas le cas.**
+
+Broches SPI par défaut du SH68F90, d'après le datasheet :
+
+| Signal | Broche |
+| --- | --- |
+| `SCK` | `P7.4` |
+| `SS` | `P7.3` (aussi `INT45`) |
+| `MOSI` | `P7.2` (aussi `INT44`) |
+| `MISO` | `P7.1` (aussi `INT41`) |
+
+Or sur le F75, **`P7.1`, `P7.2` et `P7.3` sont les lignes de matrice R1, R2 et R3** — établi par
+quatre sources concordantes (table de scan `0x72F4`, parking de veille `0x006E`, init GPIO `0xA7EC`,
+routine de lecture `0x73A6`). Ces broches portent le clavier, pas un bus SPI.
+
+Et le firmware le confirme lui-même : `fcn.0000EFA6`, appelée depuis l'init `fcn.0000ECC5`, fait
+
+```asm
+clr a ; mov SPCON, a ; mov SPSTA, a ; ret
+```
+
+soit **la désactivation explicite du périphérique SPI au démarrage**. Recherche exhaustive :
+aucun autre accès à `SPCON`, `SPSTA` ou `SPDAT` dans tout le firmware.
+
+**Conclusion : le F75 relie son BK3632 par EUART0 uniquement.** L'ICP via le SPI du 8051 est fermé —
+les broches sont prises par la matrice.
+
+*(Les broches SPI/JTAG propres au BK3632 — `GPIOA[3..7]` selon le datasheet BK3633 — existent
+évidemment toujours sur la puce. Mais rien ne dit qu'elles soient routées vers des pastilles
+accessibles sur ce PCB.)*
+
+### Au passage : le câblage RGB de référence confirme l'inversion
+
+La même issue liste le câblage RGB « de référence » du BYK916 :
+
+```
+Row0: VR0->P4_1  VG0->P6_0  VB0->P4_0
+Row1: VR1->P0_4  VG1->P6_1  VB1->P0_3
+Row2: VR2->P6_7  VG2->P6_2  VB2->P6_6
+Row3: VR3->P0_2  VG3->P6_3  VB3->P5_7
+Row4: VR4->P4_5  VG4->P6_4  VB4->P4_6
+Row5: VR5->P4_3  VG5->P6_5  VB5->P4_4
+```
+
+C'est **exactement** le brochage du NuPhy Air60 (`RGB_R0R P0_4`, `RGB_R0G P6_1`, `RGB_R0B P0_3`, …),
+à un décalage de ligne près. L'Air60 suit donc la conception de référence.
+
+Le F75, lui, met ses **colonnes de matrice sur P6/P5/P4** et ses **18 canaux RGB sur les broches PWM
+P1/P2/P3**. C'est la topologie inverse déjà documentée plus haut — et cette issue en fournit la
+confirmation externe : le F75 s'écarte délibérément du design de référence.
+
 #### B-bis. Le bootloader UART Beken — la voie la plus prometteuse pour un dump
 
 ⚠️ **On n'a pas le firmware du BK3632.** Il est dans la puce ; l'obtenir *est* le but de cette
