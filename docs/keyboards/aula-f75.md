@@ -410,7 +410,7 @@ mais **160 Ko d'ARM9** — une architecture entièrement différente, avec son p
 
 ### Ce qui est établi
 
-Liaison **EUART0** vers le BK3632, en **half-duplex** :
+Liaison **EUART0** vers le BK3632, en **full-duplex** :
 
 | Élément | Valeur |
 | --- | --- |
@@ -424,7 +424,7 @@ Longueurs observées aux points d'appel : `0x1E` (30) @ `0x46C2`, `0x0D` (13) @ 
 correspond exactement à la taille du buffer TX, qui s'arrête juste avant le buffer RX.
 | TXD / RXD | **`P5.5`** / **`P5.6`** (broches distinctes : lien full-duplex) |
 | Handshake | **`P0.2`** — mis à 0 avant émission (`0xAB13`), relâché en fin de trame par l'ISR (`0xA580`) |
-| Format | mode 1, **8N1**, `Baud = Fsys / 92` (`0xB1CE`) |
+| Format | mode 1, **8N1**, `Baud = Fsys / 92` = **~260 870 bauds** (`0xB1CE`) |
 | Routine d'envoi | `fcn @ 0xAB08` (charge nulle) / `0xAB09` (charge dans A) → `0xAB0F` |
 | Buffers | TX en IDATA `0x33`-`0x52` (**32 o**), RX en IDATA `0x54` (23 o) |
 | Drapeau émission | `0x2C.1` |
@@ -452,11 +452,186 @@ Conclusion : le firmware du BK3632 réside **dans le BK3632**. Pour l'obtenir il
 la puce (voie B ci-dessous), et pour comprendre le protocole il vaut mieux écouter le lien
 (voie A).
 
+### Toutes les fonctions qui touchent EUART0 — balayage exhaustif
+
+Balayage de l'image entière sur les sept SFR de l'EUART0 (`SCON` D8H, `SBUF` AAH, `SADDR` ABH,
+`SADEN` ACH, `SBRTH` ADH, `SBRTL` AEH, `SFINE` AFH), plus le bit d'autorisation et la priorité,
+recoupé par un scan octet à octet de tous les opcodes 8051 à opérande direct.
+
+| Fonction | Rôle | SFR touchés |
+| --- | --- | --- |
+| `0xB1C2` | **init** — débit, mode, autorisation | SBRTH, SBRTL, SFINE, SCON, PCON, IEN1 |
+| `0xA544` | **ISR EUART0** (vecteur `0x6B`) | SCON.RI/TI, SBUF, SCON |
+| `0xAB0F` | émetteur générique, longueur variable | SBUF |
+| `0xACE6` | émetteur de trame courte (6 o) | SBUF |
+| `0xEF40` | `orl IEN1,#0x40` — réarme l'IRQ (2 appels depuis `0x84E9`) | IEN1 |
+| `0xECC5` @ `0xEDE0` | priorité : `IPH1 = 0x42`, `IPL1 = 0x41` → bit 6 posé des deux côtés, **niveau 3** | IPH1, IPL1 |
+| `0x7D74`, `0x9E39` | veille : coupent EUART0, rappellent `0xB1C2` au réveil | SCON, IEN1 |
+| `0x84E9` @ `0x8548` | coupe EUART0 | IEN1 |
+| `0x41F2`, `0x4227`, `0x425D` | activent EUART0 après avoir posé XDATA `0x0319` et `0x031B` | IEN1 |
+| `0x9156` | coupe EUART0, sous condition XDATA `0x031B == 0` | IEN1 |
+
+Appelants de l'init `0xB1C2` : `main` (`0x9143`) et les **deux** chemins de réveil (`0x7E85`,
+`0x9EBF`). La liaison est donc entièrement reconfigurée à chaque sortie de veille.
+
+`XDATA 0x0319` (valeurs 1/2/3) et `XDATA 0x031B` gouvernent l'activation : ce sont selon toute
+vraisemblance le **sélecteur de mode sans-fil** (BT1/BT2/BT3 ou BT/2.4G/USB), mais leur
+sémantique **n'est pas résolue**.
+
+> **Piège de méthode.** Trois « accès à `SBUF` » — `0xB1ED`, `0xECD0`, `0x7E62` — sont des
+> **faux positifs** : ce sont les octets d'opérande de `lcall 0xABAA` (`12 ab aa`), que le scan
+> octet lit comme `mov r3, 0xAA`. Tout balayage SFR sur cette image retombe dans ce piège.
+
+#### Le vecteur — et la correction qu'il impose
+
+`_INT_USB = 7`, et le firmware place bien `ljmp isr.usb` en `0x03 + 8×7 = 0x3B`. Le mapping
+index → vecteur est donc confirmé, et il **n'est pas** celui du 8051 classique :
+
+| Vec | n | Source | Cible |
+| --- | --- | --- | --- |
+| `0x03` | 0 | **TIMER2** | `0xA4D7` |
+| `0x0B` | 1 | INT4 | `0xEF94` |
+| `0x13` | 2 | INT3 | `0xEF9A` |
+| `0x1B` | 3 | INT2 | `0xEFA0` |
+| `0x3B` | 7 | USB | `0xAC60` |
+| `0x43` | 8 | PWM0 | `0x72BA` |
+| `0x4B` | 9 | PWM1 | `0xEE12` |
+| `0x53` | 10 | PWM2 | `0xEE26` |
+| `0x63` | 12 | PWM4 | `0x816B` |
+| `0x6B` | 13 | **EUART0** | **`0xA544`** |
+
+`0x23` (SCM), `0x2B` (LPD), `0x33` (SPI), `0x5B` (PWM3) et `0x7B` ne sont pas utilisés : le
+firmware y a laissé du code ou des données.
+
+⚠️ Les étiquettes `vec.int0` / `vec.timer0` / `vec.int1` / `vec.timer1` et `isr.int0 @ 0xA4D7`
+du harnais `tools/f75_r2.py` reprenaient les noms 8051 classiques — **faux sur ce MCU**.
+Corrigées dans le même commit que cette section.
+
+#### Débit — la formule, pas une supposition
+
+`0xB1C2` écrit `SBRTH = 0xFF`, `SBRTL = 0xFB`, `SFINE = 0x0C`. `SBRTH.7` est `SBRTEN`, donc
+`SBRT = 0x7FFB = 32763`. La datasheet donne, pour les modes 1 et 3 :
+
+```
+BaudRate = Fsys / (16 × (32768 − SBRT) + SFINE)
+         = Fsys / (16 × 5 + 12)
+         = Fsys / 92
+```
+
+`Fsys` est établi par deux sources concordantes :
+
+- le firmware écrit `PLLCON = 0x03` (PLLON + PLLFS) et `CLKCON = 0x0C` (HFON + FS, avec
+  `CLKS[1:0] = 00`, donc aucune division). Datasheet : PLLFS = 1 → « PLL 的二分频作为
+  OSCSCLK », et le schéma d'horloge donne **PLL = 48 MHz** → OSCSCLK = 24 MHz ;
+- `meson.build` de SMK : `'sh68f90' : { 'freq_sys' : 24000000 }`.
+
+**Débit = 24 000 000 / 92 ≈ 260 870 bauds.** Ce n'est aucun débit normalisé, et il n'y a pas
+de valeur nominale à en déduire : la liaison est propriétaire des deux côtés.
+
+#### `SCON = 0x50` + `SSTAT` — les trois bits hauts sont des drapeaux d'erreur
+
+`0xB1CE` écrit `SCON = 0x50` → `SM1 = 1`, `REN = 1` : **mode 1, 8 bits, 1 stop**. Puis `0xB1DE`
+fait `orl PCON, #0x40`, c'est-à-dire **`SSTAT = 1`**. La datasheet est explicite :
+
+> SSTAT — 0：SCON[7:5] 工作方式作为 SM0，SM1，SM2 ／ 1：访问状态位（FE，RXOV，TXCOL）
+
+Avec `SSTAT = 1`, `SCON[7:5]` ne sont donc plus les bits de mode mais **FE** (erreur de trame),
+**RXOV** (débordement en réception) et **TXCOL** (collision d'émission) — et ils « 只能通过软件
+清零 », ne peuvent être effacés que par logiciel. C'est très exactement ce que fait la queue de
+l'ISR, dont le sens était autrement incompréhensible :
+
+```asm
+mov a, SCON
+anl a, #0xE0        ; FE | RXOV | TXCOL
+jz  fin
+anl SCON, #0x1F     ; efface les trois drapeaux d'erreur
+```
+
+#### L'ISR `0xA544` — plan mémoire IDATA
+
+```asm
+; --- reception ---
+jnb  SCON.RI, tx
+clr  SCON.RI
+mov  r0,#0x70 ; mov a,@r0     ; index d'ecriture RX
+subb a,#0x17  ; jnc fin       ; buffer plein (23 o) -> octet jete
+mov  a,#0x54  ; add a,r7      ; buf[idx]
+mov  @r0, SBUF
+inc  @r0                      ; idx++
+setb 0x24.4                   ; « octet recu »
+
+; --- emission ---
+tx: jnb SCON.TI, fin
+clr  SCON.TI
+mov  r1,#0x71 ; mov a,@r1     ; index TX
+mov  r0,#0x75 ; subb a,@r0    ; compare a la longueur-1
+jc   suite
+clr  0x2C.1                   ; fin d'emission
+anl  P0CR, #0xFB              ; P0.2 repasse en entree
+setb P0.2                     ; ... et remonte
+sjmp fin
+suite: inc @r0 ; mov a,@r0 ; add a,#0x33 ; mov SBUF, [a]
+```
+
+| IDATA | Rôle |
+| --- | --- |
+| `0x33`–`0x52` | tampon **TX** (32 o max, s'arrête juste avant le tampon RX) |
+| `0x54`–`0x6A` | tampon **RX**, 23 octets — garde `idx ≥ 0x17` |
+| `0x70` | index d'écriture RX |
+| `0x71` | index d'émission TX |
+| `0x74` | `r7` du dernier envoi (étiquette de trame) |
+| `0x75` | longueur TX **− 1** |
+
+Les 23 octets du tampon RX correspondent exactement aux 23 octets que `fcn.000005EA` recopie
+vers XDATA `0x0120` — recoupement indépendant du plan mémoire.
+
+#### `P0.2` — le handshake, mécanisme désormais prouvé
+
+Le rôle de `P0.2` était affirmé sans preuve (et d'abord décrit à tort comme une ligne de
+direction half-duplex). Les deux extrémités de la séquence le tranchent :
+
+| Moment | Code | Effet |
+| --- | --- | --- |
+| début d'émission (`0xAB13`, `0xACEA`) | `clr P0.2` ; `orl P0CR,#0x04` ; `clr P0.2` | `P0.2` passe **en sortie** et est tiré **bas** |
+| fin d'émission (ISR, `0xA580`) | `anl P0CR,#0xFB` ; `setb P0.2` | `P0.2` repasse **en entrée**, relâché **haut** |
+
+Datasheet, registre `P0CR` (E1H) : « 0：输入模式 » — donc 1 = sortie. `P0.2` est bien une ligne
+de **requête d'émission / réveil** vers le BK3632, maintenue basse pendant toute la rafale.
+
+#### Somme de contrôle — même constante en émission et en réception
+
+`0xAB0F` accumule les octets `0x33 .. 0x33+len−2` puis écrit `0x55 − Σ` comme **dernier** octet
+de la trame (`0xAB2E`). C'est la **même constante `0x55`** que celle déjà relevée sur les
+réponses reçues — recoupement des deux sens de la liaison.
+
+#### Les deux émetteurs
+
+- **`fcn.0000AB0F`** — générique. Entrée : `r5` = longueur totale, trame déjà composée en IDATA
+  `0x33`. Il calcule la somme, la place en dernier, remet les index à zéro et amorce en écrivant
+  `SBUF = IDATA[0x33]` ; l'ISR envoie le reste. Cinq appelants (`0x46C2`, `0x4730`, `0xA376`,
+  `0xB0B8`, `0xED53`).
+- **`fcn.0000ACE6`** — trame fixe de 6 octets `01 <r7> <r5> 00 00 <somme>`. Ses deux seuls
+  appelants sont **dans le parseur `fcn.000005EA`** (`0x078A`, `0x0811`) : c'est donc la voie de
+  réponse. *Lecture inférée* : `0x01` en tête sert ici d'accusé de réception court, par
+  opposition aux réponses de 10 octets commençant par `0x02`.
+
+#### Chaîne complète du drapeau de réception
+
+```
+ISR EUART0  (0xA544, vec 0x6B)   setb 0x24.4          « octet recu »
+ISR PWM0    (0x72BA, vec 0x43)   0x24.4 -> 0x2D.7     relais, en 0x7444
+ISR TIMER2  (0xA4D7, vec 0x03)   lcall 0x05EA @ 0xA519
+fcn.000005EA                     IDATA 0x54 (23 o) -> XDATA 0x0120
+```
+
+Le parseur ne tourne donc **pas** dans la boucle principale mais dans l'**ISR TIMER2**.
+
 ### Réception : parser et format des réponses
 
 La réception se fait en **deux étages**.
 
-**1. L'ISR ne fait que signaler.** À la fin de l'ISR du tick (`0x7444`) :
+**1. L'ISR ne fait que signaler.** À la fin de l'**ISR PWM0**
+(vecteur `0x43` → `0x72BA`), en `0x7444` :
 
 ```asm
 jnb  0x24.4, ...   ; drapeau materiel « donnees recues », pose par l'ISR EUART0
@@ -1054,6 +1229,108 @@ Le NuPhy Air60 parle à son BK3632 en **SPI bit-bangé** (`RF_BB_SPI_*`, `src/pl
 L'AULA F75 utilise **EUART0**. `src/platform/bk3632/rf_controller.c` n'est donc **pas réutilisable
 tel quel** : il faudrait lui écrire un transport EUART0. C'est pour cette raison que l'entrée
 `meson.build` ne déclare **pas** `'wireless': 'bk3632'`.
+
+## EEPROM émulée en flash — l'IAP
+
+Le F75 n'a pas d'EEPROM (le `settings_store` de SMK vaut `flash` pour le `sh68f90`). Les
+réglages persistants sont écrits **dans la flash de programme elle-même**, par une routine IAP
+que voici de bout en bout.
+
+### `fcn.0000AAC1` — enregistrer une page de réglages
+
+Douze appelants, dont la grappe du parseur EUART0 (`0x77CE`, `0x77FF`, `0x7830`, `0x7861`,
+`0x7892`, `0x78C3`, `0x78F4`) et `fcn.0000AF99` (publication d'un effet RGB, en `0xAFB3`) :
+c'est la routine qui **rend un réglage permanent**, qu'il vienne du sans-fil ou des touches.
+
+```asm
+mov  dptr,#0x0F18 ; sauve r6, r7, r5 en 0x0F18-0x0F1A
+mov  c, EA ; mov 0x2E.5, c   ; memorise l'etat de EA
+clr  EA                      ; toutes interruptions coupees
+lcall fcn.0000EEE3           ; relache la matrice (voir plus bas)
+movx a, [0x0F1A] ; -> 0x0302 ; numero de page
+lcall fcn.0000AEE4           ; efface la page
+...
+mov  r3,#0x01 ; r2,#0x09 ; r1,#0xBF    ; source = 0x09BF
+movx [0x0F20] = 0x02, [0x0F21] = 0x00  ; longueur = 0x0200 = 512
+lcall fcn.00000181           ; ecrit la page
+movx [0x0302] = 0
+lcall fcn.0000EDBB           ; reverrouille
+mov  c, 0x2E.5 ; ...         ; restaure EA
+```
+
+### `fcn.0000AEE4` — la borne, et donc la carte de la zone
+
+```asm
+mov a,r7 ; setb c ; subb a,#0x62 ; jc  ret   ; rejette page < 99
+mov a,r7 ;         subb a,#0x76 ; jc  corps  ; rejette page > 117
+...
+add  a, 0xE0                                 ; direct E0H = ACC -> a = r7 × 2
+mov  0xF7, a                                 ; XPAGE = page × 2
+mov  r7,#0xE6 ; lcall fcn.0000989F           ; declenche l'effacement
+```
+
+`XPAGE` (F7H) reçoit `page × 2`, soit l'octet de poids fort de l'adresse : **une page vaut 512
+octets** — ce qui est exactement le `sector_size` déclaré par SMK pour le `sh68f90`.
+
+| | |
+| --- | --- |
+| Pages autorisées | **99 à 117** (bornes vérifiées dans le code, pas déduites) |
+| Adresses | **`0xC600` – `0xEBFF`** |
+| Taille | 19 pages × 512 o = **9 728 octets** |
+
+La zone tombe entièrement dans les 61 440 octets du firmware (`0xEBFF < 0xF000`) : cohérent.
+
+`fcn.0000989F` écrit ensuite `IB_CON1..IB_CON5` (F2H–F6H) après avoir revérifié **une seconde
+fois** que `XPAGE / 2` est bien dans `[99, 117]` et que `EA` est nul — double garde contre un
+effacement hors zone.
+
+### Vérification sur le dump : la zone est vivante, et à moitié utilisée
+
+Entropie par page de 512 octets sur `assets/f75_firmware.bin` :
+
+| Page | Adresse | Entropie | Octets nuls |
+| --- | --- | --- | --- |
+| 98 | `0xC400` | 6.53 | 46 | *(code — hors zone)* |
+| 99 | `0xC600` | 1.20 | 425 |
+| 100 | `0xC800` | 1.10 | 230 |
+| 101 | `0xCA00` | 0.22 | 494 |
+| 102–105 | `0xCC00`–`0xD3FF` | 1.0 – 1.9 | 412 – 455 |
+| 106–109 | `0xD400`–`0xDBFF` | 0.04 | 510 |
+| 110–117 | `0xDC00`–`0xEBFF` | **0.00** | **512** |
+| 118 | `0xEC00` | 6.40 | 11 | *(code — hors zone)* |
+
+Les pages 98 et 118, juste au-delà des bornes, sont du code dense (entropie > 6) ; les pages
+99 à 117 sont à faible entropie et majoritairement nulles. **Les bornes déduites du code
+coïncident exactement avec la frontière code/données observée dans le dump** — confirmation
+indépendante. Les huit dernières pages sont intégralement vierges : la zone est
+surdimensionnée par rapport à ce que le firmware d'usine y range.
+
+Cette page 101 (`0xCA00`) est celle que `fcn.0000AF99` sauvegarde : les constantes `r6 = 0xCA`
+(202 = 101 × 2) et `r5 = 101` du site `0xAFB3` s'expliquent enfin — c'est **la page où l'effet
+RGB courant est rendu persistant**.
+
+### `fcn.0000EEE3` — cinquième confirmation du brochage des colonnes
+
+Appelée juste avant de couper les interruptions, elle relâche la matrice — le balayage étant
+suspendu pendant l'écriture flash :
+
+```asm
+mov 0xC0, #0xFF   ; P6 = 0xFF    -> colonnes P6.0 .. P6.7
+orl 0x88, #0x87   ; P5 |= 0x87   -> colonnes P5.0, P5.1, P5.2, P5.7
+orl 0xB0, #0x0D   ; P4 |= 0x0D   -> colonnes P4.0, P4.2, P4.3
+```
+
+Les trois masques reproduisent **exactement** la carte des 15 colonnes établie par ailleurs.
+C'est une cinquième source indépendante, et elle n'a pas été cherchée pour ça.
+
+> ⚠️ Cette routine n'a **jamais été exécutée** : rien n'a été flashé sur l'appareil. Ce qui
+> précède est du désassemblage, pas de l'observation.
+
+### Reste ouvert
+
+`0xA4BD` — second poseur du drapeau `0x2C.7`, à côté de `0x0A71` déjà documenté. Il efface
+`0x2A.5` et `0x24.5` puis recopie XDATA `0x0D18` vers `0x08C0`, sur la condition
+`XDATA 0x009D == 0x2D` et `XDATA 0x0D17 == 0x06`. Non analysé.
 
 ## Récupération : ce que le bootloader garantit vraiment
 
