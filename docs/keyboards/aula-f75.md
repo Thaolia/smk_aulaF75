@@ -459,6 +459,115 @@ Trois chemins écrivent `0x0E24` :
 À côté, `0x038E` et `0x038F` forment un petit bloc de configuration écrit dans la foulée
 (`0x038E = 0`, `0x038F = r5`), non identifié.
 
+### L'ordonnanceur d'animation — `0x1AF0` et la table `0x1B13`
+
+Choisir un effet ne l'anime pas. L'animation est cadencée par un ordonnanceur situé à la fin de la
+grande fonction RGB (Ghidra `0x1108`–`0x1DC2`, r2 `fcn.00001111`), et **aucun des deux outils ne
+l'avait sorti** : le corps est atteint par saut calculé, donc r2 le laisse hors fonction et Ghidra
+laisse les octets indéfinis. Il se lit au désassemblage, depuis une ancre sûre.
+
+#### Les trois variables
+
+| Adresse | Rôle | Écrit par |
+| --- | --- | --- |
+| `0x0300:0x0301` | **tic d'animation**, 16 bits gros-boutiste | incrémenté par `isr.pwm4` (`0x8188`), remis à zéro par `0x1D69` |
+| `0x08BB:0x08BC` | **période** de l'effet courant | `0x1AE2`, juste avant l'aiguillage : poids fort = 0, poids faible = `r7` |
+| `0x097C` | compteur secondaire | incrémenté par `isr.pwm4` (`0x8196`) |
+
+`isr.pwm4` incrémente `0x0301` et ne touche `0x0300` que sur débordement — c'est bien un compteur
+16 bits, et la période tenant sur `r7` reste **inférieure à 256**.
+
+> `0x08BC` n'est atteint par aucun `mov dptr, #0x08bc` : il n'est lu que par `inc dptr`. Chercher
+> l'adresse d'un octet haut d'un mot 16 bits ne donne rien — c'est le piège du pointeur calculé,
+> déjà rencontré sur le bloc de réglages.
+
+#### L'aiguillage
+
+```asm
+0x1AE2  mov dptr,#0x08BB ; clr a ; movx @dptr,a ; inc dptr ; mov a,r7 ; movx @dptr,a
+0x1AEA  jb  0x24.2, 0x1AF0        ; sinon, rien
+0x1AED  ljmp 0x1DC2
+0x1AF0  mov dptr,#0x0896 ; movx a,@dptr    ; a = effet courant
+0x1AF4  add a,#0xE0 ; jnz +3 ; ljmp 0x1DAB ; effet 0x20
+0x1AFB  add a,#0xFA ; jnz +3 ; ljmp 0x1D05 ; effet 0x26
+0x1B02  add a,#0x26                        ; a restaure
+0x1B04  cjne a,#0x12,$+3 ; jc 0x1B0C ; ljmp 0x1DC2   ; borne : 18 effets
+0x1B0C  mov dptr,#0x1B13 ; mov r0,a ; add a,r0 ; add a,r0   ; a = 3 x idx
+0x1B12  jmp @a+dptr
+```
+
+La chaîne `add a,#0xE0 / add a,#0xFA / add a,#0x26` cumule à zéro : les deux premiers termes
+testent `0x20` et `0x26` sans détruire l'accumulateur. **Ce n'est pas un calcul, c'est deux
+`if` déguisés** — un idiome de compilateur qui trompe la lecture rapide.
+
+#### La table `0x1B13` — dix-huit gestionnaires
+
+Chaque gestionnaire compare le tic à la période, et n'agit que si `tic ≥ période` ; sinon il part
+sur `0x1DC2` (`ret`). Quand il agit, il appelle le rendu puis saute à la queue commune `0x1D69`,
+qui **remet le tic à zéro**.
+
+| idx | Gestionnaire | Seuil | Compteur `0x097C` | Rendu |
+| --- | --- | --- | --- | --- |
+| 0 | `0x1B49` | immédiat **100** | — | `0xEE6A` |
+| 1 | `0x1B61` | immédiat **10** | — | `0x746A`, pas `0x08C3` borné à 9 |
+| 2 | `0x1B8D` | `0x08BB` | — | **`0x7C12`** |
+| 3 | `0x1BAB` | `0x08BB` | — | `0x9DA4` |
+| 4 | `0x1BC9` | `0x08BB` | ≥ 16 → `0x64F1` | `0x5BE9` |
+| 5 | `0x1BF5` | `0x08BB` | ≥ 11 → `0x64F1` | `0x9B2B` |
+| 6 | `0x1C21` | `0x08BB` | — | `0x60C9` |
+| 7 | `0x1C3F` | `0x08BB` | ≥ 16 → `0x64F1` | `0x5BE9` |
+| 8 | `0x1C6B` | — | — | `ljmp 0xAC1C` (tremplin) |
+| 9 | `0x1DC2` | — | — | **`ret` — effet inactif** |
+| 10 | `0x1C6E` | `0x08BB` | ≥ 16 → `0x64F1` | `0x8DDF` |
+| 11 | `0x1C9A` | `0x08BB` | — | `0x6C9B` |
+| 12 | `0x1CBC` | `0x08BB` | — | `0x64F1` |
+| 13 | `0x1CDA` | `0x08BB` | ≥ 3 → `0x64F1` | `0x5BE9` |
+| 14 | `0x1DC2` | — | — | **`ret` — effet inactif** |
+| 15 | `0x1D51` | `0x08BB` | — | `0x82A5` |
+| 16 | `0x1D71` | `0x08BB` | — | `ljmp 0x9659` |
+| 17 | `0x1D8D` | `0x08BB` | — | corps en ligne |
+
+Hors table, les deux effets spéciaux :
+
+| Effet | Gestionnaire | Ce qu'il fait |
+| --- | --- | --- |
+| `0x20` | `0x1DAB` | seuil immédiat **100** |
+| `0x26` | `0x1D05` | `0x097C ≥ 5` → force **`0x0D19 = 4`** (luminosité) puis `0x64F1` ; ensuite seuil immédiat **1** |
+
+`0x64F1` revient sept fois : c'est le rendu partagé, appelé soit comme sous-étape sur le compteur
+secondaire, soit comme rendu principal (idx 12). Les indices **9 et 14 sont explicitement vides** —
+deux emplacements d'effet réservés et non implémentés.
+
+#### `0x1BA5`, en particulier
+
+C'est la ligne utile du gestionnaire d'indice **2** :
+
+```asm
+0x1B8D  mov dptr,#0x08BB ; movx a,@dptr ; mov r6,a   ; periode, poids fort
+0x1B92  inc dptr ; movx a,@dptr ; mov r7,a           ; periode, poids faible
+0x1B95  clr c
+0x1B96  mov dptr,#0x0301 ; movx a,@dptr ; subb a,r7
+0x1B9B  mov dptr,#0x0300 ; movx a,@dptr ; subb a,r6
+0x1BA0  jnc 0x1BA5
+0x1BA2  ljmp 0x1DC2       ; tic < periode : rien a faire
+0x1BA5  lcall 0x7C12      ; rendu de l'effet 2
+0x1BA8  ljmp 0x1D69       ; remise a zero du tic
+```
+
+**Qui y saute :** le `jnc` de `0x1BA0`, quand `tic ≥ période`. Et qui atteint le bloc : le saut
+calculé `jmp @a+dptr` de `0x1B12`, via l'entrée 2 de la table `0x1B13`. Aucun `lcall` ni `ljmp`
+direct — c'est pour cela qu'un balayage de références ne trouvait rien.
+
+Cela referme la question laissée ouverte sur `fcn.00007C12` : ce n'est pas une routine orpheline,
+c'est **le moteur de rendu de l'effet d'indice 2**, et il relit `0x0896` en `0x7C33` et `0x7C6F`
+pour retrouver sa palette.
+
+> **Correction sur Ghidra.** `get_xrefs_to 0x7C12` annonce un `COMPUTED_JUMP` venant de `0x7B24`,
+> le `jmp @a+dptr` de `fcn.00007AAD`. C'est faux : la table de ce saut est en `0x7B25`, elle compte
+> **treize entrées** (`0x7B25`–`0x7B48`) et **aucune ne vaut `0x7C12`** — elles pointent toutes
+> entre `0x7B4C` et `0x7B8A`. La reconstruction de table de Ghidra déborde, et c'est cette
+> destination inventée qui lui fait fusionner `0x7AAD` et `0x7C12` en une seule fonction.
+
 ### `XRAM 0x009D` — index d'effet RGB
 
 Vingt sites y accèdent. Trois convergences l'identifient :
@@ -1899,10 +2008,15 @@ deux : `fcn.00007AAD` (245 o utiles) et `fcn.00007C12` (354 o). **Le désassembl
 faveur de r2** — il y a un `ret` en `0x7C11`, et `0x7C12` est la cible d'un `lcall`. Ce sont deux
 routines, pas une.
 
-Pourquoi Ghidra les fusionne : l'**unique** appelant de `0x7C12` est le site `0x1BA5`, et ce site
-n'appartient à **aucune fonction**. Le code y est atteint par saut long depuis une autre routine ;
-`fcn.0000131c`, la fonction la plus proche en amont, ne fait que **deux octets**. Sans appelant
-visible, `0x7C12` ressemble à la suite du corps précédent.
+Pourquoi Ghidra les fusionne : il attribue à `0x7C12` un `COMPUTED_JUMP` venant du `jmp @a+dptr`
+de `0x7B24` — une destination que la table réelle, treize entrées en `0x7B25`, ne contient pas. Sa
+reconstruction de table déborde. Le seul appelant véritable de `0x7C12` est le site `0x1BA5`, que
+r2 place hors fonction (`fcn.0000131c`, la plus proche en amont, fait **deux octets**) et dont
+Ghidra n'a pas désassemblé les octets. Sans appelant visible d'un côté, avec un appelant imaginaire
+de l'autre, les deux outils se trompent en sens contraire.
+
+> Ce site est maintenant identifié : c'est le gestionnaire d'indice 2 de l'ordonnanceur
+> d'animation RGB. Voir *L'ordonnanceur d'animation — `0x1AF0` et la table `0x1B13`*.
 
 ```asm
 0x1B9B  mov dptr, #0x0300   ; compteur 16 bits
