@@ -1118,12 +1118,75 @@ traitent le mode 1 distinctement du mode 2, chacun avec son propre `xrl`.
 > de ces claviers. *Établi :* trois valeurs ; le mode 2 porte un slot 1–3 ; le mode 0 est celui où
 > l'USB est initialisé et où le sans-fil est intégralement coupé.
 
-#### Un point ouvert, net
+#### Résolu : `0x031B` est un champ d'un bloc de réglages persisté
 
-**Aucune écriture directe de la valeur 1 dans toute l'image.** Les seules écritures de `0x031B`
-trouvées sont `= 2` (trois sites) et `= 0` (un site). Le mode 1 est donc rétabli par un autre
-chemin — bloc de réglages relu depuis la flash, ou écriture par pointeur calculé que la recherche
-sur `mov dptr, #0x031b` ne voit pas. À trancher.
+Le point resté ouvert — « aucune écriture directe de la valeur 1 » — a une explication nette :
+`0x031B` n'est pas une variable isolée, c'est **l'octet 14 d'un bloc de 128 octets** qui vit à
+trois endroits.
+
+```
+flash page 99 (0xC600, 128 o)
+      |   fcn.0000A611     lecteur flash generique
+      v                    base 0x0ED6:7, dest 0x0ED8:9, compte 0x0EDA:B, movc @a+dptr
+XRAM 0x09BF   bloc de travail, 128 o
+      |   fn.fx_init  @ 0xA2BB-0xA2D1     [0x09BF + i] -> [0x030D + i]
+      v
+XRAM 0x030D   bloc VIF, 128 o
+```
+
+et le retour :
+
+```
+XRAM 0x030D --fcn.0000A069 @ 0xA083/0xA0C2--> XRAM 0x09BF --iap.save--> flash page 99
+```
+
+`fn.fx_init` est appelée deux fois par `vec.reset` (`0x9110`, `0x9174`) : la restauration a bien
+lieu au démarrage. Et juste avant de sauvegarder, `fcn.0000A069` rafraîchit explicitement les
+deux champs :
+
+```asm
+[0x09CB] = [0x0319]      ; slot Bluetooth     (offset 12)
+[0x09CD] = [0x031B]      ; transport actif    (offset 14)
+mov r5,#0x63 ; r6,#0xC6  ; page 99 = 0xC600
+lcall iap.save
+```
+
+L'arithmétique ferme la boucle : `0x030D + 12 = 0x0319`, `0x030D + 14 = 0x031B`, et
+`0x09BF + 12 = 0x09CB`, `0x09BF + 14 = 0x09CD`.
+
+**Pourquoi la recherche ne voyait rien.** Le bloc vif est adressé **par pointeur calculé**
+(`mov a,#0x0d ; add a,r7 ; mov DPL,a ; mov a,#0x03 ; addc a,r6 ; mov DPH,a`) depuis quatre sites,
+et le bloc de travail depuis une trentaine. Une routine générique « écrire l'octet de config N »
+pose donc `0x031B` sans jamais émettre `mov dptr, #0x031b`. La valeur 1 arrive par là, ou par la
+restauration flash — pas par une constante en dur.
+
+#### Vérification sur le dump
+
+Bloc lu à `0xC600` dans `assets/f75_firmware.bin` :
+
+```
+0xC600  00 03 03 02 00 00 04 04 07 00 04 20 01 00 00 00
+0xC610  00 00 00 00 02 01 00 ff 02 00 00 00 01 00 03 01
+...
+0xC670  09 37 09 37 04 09 04 04 04 04 04 04 04 04 5a a5
+```
+
+| Offset | XRAM vif | Valeur | Rôle |
+| --- | --- | --- | --- |
+| 12 | `0x0319` | **1** | slot Bluetooth |
+| 14 | `0x031B` | **0** | transport actif — **filaire** |
+| 126–127 | `0x038B`–`0x038C` | `5A A5` | marqueur de validité |
+
+`0x031B = 0` : le clavier était en **mode filaire** au moment du dump — ce qui est exactement le
+cas, `sinowisp` ayant lu par l'USB. La chaîne complète flash → `0x09BF` → `0x030D` est confirmée
+de bout en bout par une valeur observable.
+
+Le `5A A5` en queue de bloc est la signature classique d'un marqueur de validité : il permet au
+firmware de distinguer un bloc écrit d'une page effacée.
+
+> Cette page 99 est la même que celle sauvegardée par `fcn.0000A069`, et elle figurait déjà
+> parmi les sept pages non vierges relevées à l'analyse d'entropie de la zone IAP. Les deux
+> observations, faites indépendamment, se rejoignent.
 
 ### Réception : parser et format des réponses
 
