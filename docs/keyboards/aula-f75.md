@@ -1729,6 +1729,156 @@ réécrit les réglages persistés.
 | `0x03` | pose `0x2C.3`, efface `0x0150`, répond par `euart0_reply` |
 | `0x08` | vérification de somme puis les sous-commandes ci-dessus |
 
+### La table des commandes — établie au décompilateur
+
+Les douze émetteurs gardés par `P4.7` ont été décompilés. L'octet de commande est l'octet 1 de la
+trame, posé par l'appelant en IDATA `0x34` ; `euart0_send(longueur, étiquette)` fait le reste.
+
+| Cmd | Émetteur | Long. | Charge utile | Déclencheur |
+| --- | --- | --- | --- | --- |
+| `0x01` | `0xED89` | 6 | slot, 0 | radio non connectée (`euart0_parse`, `0xEF5A`) |
+| `0x02` | `hid_report_radio` | **30** | 28 o tirés de la file | rapport HID de type 2 |
+| `0x03` | `hid_report_radio` | **13** | 11 o tirés de la file | rapport HID de type 3 |
+| `0x04` | `0xB06A` | 6 | un paramètre | `0x2C.4` posé |
+| `0x06` | `0xED3B` | 6 | `00 00 00` | **requête d'état** → réponse `02 06 …` |
+| `0x08` | `0xB093` | 23 | conteneur, sous-code en `[3A]` | 9 appelants |
+| `0x09` | `0xA307` | 32 | nom Bluetooth | `main` |
+| `0x0B` | `0xB0BC` | 6 | un paramètre | `0xEED1` |
+| `0x0C` | `0xAE50` | 6 | deux paramètres | — |
+| `0x0D` | `0xB108` | 6 | pourcentage de batterie | `0x801F`, une trame d'état sur six |
+| `0x0E` | `0xEC85` | 6 | — | mode filaire |
+
+Tous suivent le même prologue, qui explique les deux gardes déjà relevées :
+
+```c
+if (_c_1 != 1 && RD != 0) {        /* pas d'emission en cours, module pret */
+    memset(IDATA 0x33, 0, 0x20);
+    euart0_tx_buf = 1;             /* octet 0 : en-tete constant */
+    DAT_INTMEM_34 = <commande>;
+    euart0_send(...);
+}
+```
+
+`RD` est le nom 8051 générique que Ghidra donne au bit `0xB7` : c'est **`P4.7`**, la ligne
+« module prêt ». Ghidra ne renomme pas les bits de l'espace `BITS` avec la carte SFR.
+
+#### Le conteneur `0x08`
+
+`euart0_cmd08` transporte un sous-message. Depuis `hid_report_radio`, quand la file est vide :
+
+```c
+IDATA[0x35] = 0x13; [0x36] = 10; [0x37] = 1; [0x38] = 0; [0x39] = 4;
+IDATA[0x3A] = <sous-code>;          /* 5 = batterie, 7 = reglages */
+IDATA[0x3B] = <valeur>;             /* 0x0C36 (pourcentage) ou g_settings */
+IDATA[0x3C] = bit0 si pas plein, bit4 si en charge;
+euart0_cmd08();
+```
+
+Le site `0x393E`, lui, pose `[35] = 0x13, [36] = 5, [37] = 1, [39] = 0x0A` puis copie dix octets
+depuis `CODE:0xB3DC` — même enveloppe, sous-message différent.
+
+### La trame d'état reçue — `02 06 …`
+
+C'est la branche `octet[0] == 2` de `euart0_parse`, la seule qui restait à lire. Elle est gardée
+deux fois avant tout traitement :
+
+```c
+if (frame[2] != 0)      return;    /* octet 2 impose a 0 */
+if ((frame[1] ^ 6) != 0) return;   /* octet 1 impose a 6 */
+sum = 0x55 - Σ frame[0..8];
+if (frame[9] != sum)     return;   /* somme sur NEUF octets */
+```
+
+Dix octets, somme de contrôle sur les neuf premiers — ce qui confirme le format déjà relevé, en y
+ajoutant les deux contraintes. C'est la **réponse à la commande `0x06`** : requête et réponse
+portent le même code.
+
+| Octet | Destination | Rôle |
+| --- | --- | --- |
+| 3 | `0x0F41` | — |
+| 4 | `0x09BA` | code d'état — `0x0A` en filaire, `0x0B` autre, comparé au slot en Bluetooth |
+| 5 | `0x09AC` | **drapeau « connecté »** |
+| 6–7 | `0x02E7`:`0x02E6` | **jauge, 16 bits petit-boutiste** |
+
+> **Correction.** J'avais lu la jauge comme `octet × 256` d'après le désassemblage. Le C montre
+> l'affectation finale : `0x02E6` (poids fort) reçoit `frame[7]`, `0x02E7` (poids faible) reçoit
+> `frame[6]`. C'est un **vrai champ 16 bits**, ce qui colle mieux aux seuils 737 / 781 / 846 / 912
+> et à une conversion sur 10 bits.
+
+Le traitement dépend ensuite du transport :
+
+```c
+if (g_transport == 2) {                     /* Bluetooth */
+    if (g_bt_slot == 0 || g_bt_slot > 3) g_bt_slot = 1;   /* borne 1..3 */
+    if (frame[4] == slot && frame[5] != 0)  /* connecte */ ;
+    else  cmd_01(g_bt_slot, 0);
+}
+else if (g_transport == 1) {                /* 2,4 GHz */
+    if (frame[4] != 0 || frame[5] == 0) cmd_01(0, 0);
+}
+else if (g_transport == 0 && frame[4] != 0x0A) cmd_0E();   /* filaire */
+```
+
+**Le slot Bluetooth est borné à 1–3 par le code lui-même** — la plage n'était jusqu'ici qu'une
+déduction à partir des trois blocs de sélection.
+
+Et la queue de la fonction relâche le handshake :
+
+```c
+if (_c_1 != 1) { P0CR &= 0xFB; P0_2 = 1; }   /* P0.2 en entree, relachee haute */
+```
+
+### `0x801F` — la jauge de batterie, et la courbe `0xAF8D`
+
+Appelée une fois toutes les six trames d'état. Elle convertit la valeur brute en pourcentage
+(`0x0151`, plafonné à 100, nul sous `0x02CB` = 715), puis **fait converger un pourcentage affiché**
+vers cette cible, un pas à la fois :
+
+```c
+ecart = |affiche - cible|;
+delai = CODE[0xAF8D + ecart/10];
+if (++compteur >= delai) { compteur = 0; affiche += ±1; }
+```
+
+`CODE:0xAF8D` fait **exactement douze octets** :
+
+```
+20 10 05 02 02 02 02 02 02 02 02 02
+```
+
+Écart de 0–9 → 20 tics par pas ; 10–19 → 10 ; 20–29 → 5 ; au-delà → 2. Un **amortissement
+décélérant** : plus la valeur affichée approche du réel, plus elle ralentit.
+
+> Cette courbe était signalée comme inexpliquée depuis le début de l'analyse. Elle l'est.
+
+Le sens de convergence est choisi par `0x26.0`, avec deux compteurs distincts (`0x08C5` à la
+montée, `0x08DC` à la descente) et un traitement particulier à 100 % selon `0x2D.3`.
+*Inféré :* `0x26.0` = charge en cours.
+
+### La file d'émission radio — correction
+
+`0x0C57` n'est **pas** « un enregistrement de 28 octets par hôte apparié », comme je l'avais
+supposé. C'est une **file circulaire de six emplacements de 28 octets** :
+
+| | |
+| --- | --- |
+| Écriture | `g_radio_host_idx` (`XRAM 0x0307`) |
+| Lecture | `XRAM 0x030C` |
+| Bouclage | `if (idx > 5) idx = 0` — **six** emplacements |
+| Octet 0 de l'emplacement | type : **2** ou **3**, qui devient l'octet de commande |
+
+À l'émission, le type décide de la taille :
+
+```c
+if (type == 2) { memcpy(IDATA 0x34, slot, 0x1C); euart0_send(0x1E, 6); }  /* 28 o -> 30 */
+if (type == 3) { memcpy(IDATA 0x34, slot, 0x0B); euart0_send(0x0D, 6); }  /* 11 o -> 13 */
+```
+
+Et les drapeaux qui remplissent la file sont **les mêmes** que ceux de la chaîne USB de
+`hid_report_usb` : `0x2A.4`, `0x27.0`, `0x2A.6` produisent un type 2 ; `0x2A.0` et `0x29.0` un
+type 3. Les deux transports se partagent la même source d'événements — ce qui referme le raccord
+décrit plus haut.
+
 ### Grammaire des trames — établie
 
 Le format est décodé, et une commande l'est sémantiquement.
