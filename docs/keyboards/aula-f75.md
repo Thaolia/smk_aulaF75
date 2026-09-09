@@ -1663,6 +1663,72 @@ dongle 2,4 GHz.
 
 C'est la troisième source d'effet, à côté des touches Fn et du chemin USB.
 
+### Ce que le décompilateur ajoute sur `euart0_parse`
+
+Le firmware a été rechargé dans **Ghidra 12.1.3** (`8051:BE:16:default`), avec l'espace `EXTMEM`
+mappé et les noms portés. Le C de `euart0_parse` donne trois choses que le désassemblage n'avait
+pas rendues.
+
+#### La somme de contrôle est bien vérifiée en réception
+
+```c
+BANK1_R0 = 0;
+do { BANK1_R0 += frame[i]; i++; } while (i != 0x15);
+BANK1_R0 = 0x55 - BANK1_R0;
+if ((DAT_EXTMEM_0135 ^ BANK1_R0) == 0) { /* trame acceptee */ }
+```
+
+Vingt-et-un octets sommés, `0x55 − Σ`, comparé à l'octet 21 de la trame. **La même constante
+`0x55` est donc vérifiée dans les deux sens** — ce n'était établi qu'à l'émission.
+
+#### Un sous-index dans le quartet haut de l'octet 5
+
+```c
+bVar10 = frame[5];                    /* XDATA 0x0125 */
+DAT_EXTMEM_038f = bVar10 & 0xf;       /* longueur */
+DAT_EXTMEM_038d = bVar10 >> 4;        /* sous-index */
+```
+
+`0x038D` est exactement l'adresse que la chaîne de sélection d'effet utilise comme sous-index —
+la lecture « quartet haut d'un octet de config » est confirmée, et sa **source est une trame
+radio**.
+
+#### Deux sous-commandes de la trame `0x08`
+
+| Sous-index | Effet |
+| --- | --- |
+| `2` | remplit **toute** une table de couleurs avec un seul triplet RGB |
+| `1` | transfert **fragmenté** vers le bloc de réglages de travail |
+
+Sous-index 2 — la boucle écrit les **mêmes** trois octets (`frame[6..8]`) partout :
+
+```c
+for (n = 0; n != 0x15; n++)
+  for (m = 0; m != 6; m++)
+    *(0x0152 + n*0x12 + m*3 + k) = frame[6+k];
+```
+
+Soit une table en **XDATA `0x0152`–`0x02CB`**, 378 octets : 21 rangées de 18 octets, six triplets
+par rangée. Elle s'arrête juste avant `0x02CC`, que `bt_set_name` utilise — la borne est cohérente.
+
+> *À noter sans trancher :* 21 × 6 = **126 entrées**, alors que le F75 n'a que 90 positions de
+> matrice (6 × 15). La table est donc soit surdimensionnée pour la famille de claviers qui partage
+> ce firmware, soit indexée autrement que par (ligne, colonne).
+
+Sous-index 1 — l'écriture va vers `0x09BF + offset`, c'est-à-dire le **bloc de travail des
+réglages** déjà identifié, avec `frame[4]` en numéro de séquence (contrôle
+`frame[4] == précédent + 1`, mémorisé en `0x09AA`), `frame[5] & 0x0F` en longueur, et une borne
+sur `0x76` = 118. C'est le chemin par lequel l'hôte — ou l'application mobile via le Bluetooth —
+réécrit les réglages persistés.
+
+#### Types de trame confirmés
+
+| Octet 0 | Traitement |
+| --- | --- |
+| `0x02` | branche principale |
+| `0x03` | pose `0x2C.3`, efface `0x0150`, répond par `euart0_reply` |
+| `0x08` | vérification de somme puis les sous-commandes ci-dessus |
+
 ### Grammaire des trames — établie
 
 Le format est décodé, et une commande l'est sémantiquement.
