@@ -46,10 +46,15 @@
  * (`MOV B,#4 / MUL AB` puis addition 16 bits de l'octet de table), rangée en
  * GROS-BOUTISTE dans le tampon 0x05A2 + colonne * 36 que le chargeur recopie.
  *
- * D'où la sémantique réelle : l'impulsion s'étend de DUTY1 à DUTY2, donc sa
- * largeur vaut `valeur << 2` et le décalage de phase disparaît du résultat
- * lumineux. Le rapport cyclique est DIRECT -- 0 = éteint (DUTY2 = DUTY1,
- * impulsion nulle), 255 = 1020/1200 soit 85 % de la période.
+ * D'où le SENS, par monotonicité -- le datasheet ne dit pas laquelle des deux
+ * arêtes DUTY1/DUTY2 ouvre l'impulsion, et `pwm.h` non plus, mais on n'en a pas
+ * besoin. DUTY1 est figé et DUTY2 croît avec la valeur ; sous la lecture
+ * opposée, la valeur 1 donnerait une impulsion de 1196 crans et la valeur 255
+ * une de 180, soit une luminosité DÉCROISSANTE avec la valeur, discontinue en
+ * zéro. Absurde. Donc l'impulsion va bien de DUTY1 à DUTY2, sa largeur vaut
+ * `valeur << 2`, le décalage de phase disparaît du résultat lumineux, et le
+ * rapport cyclique est DIRECT -- 0 = éteint (DUTY2 = DUTY1, impulsion nulle),
+ * 255 = 1020/1200 soit 85 % de la période.
  *
  * La rédaction précédente posait `AULA_RGB_DUTY_INVERTED 1` avec DUTY1 = période
  * et `duty = période - valeur * 4,6875`. C'était l'exact contraire : le panneau

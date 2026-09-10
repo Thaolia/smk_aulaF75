@@ -158,9 +158,13 @@ et en combinant avec l'ordre de chargement :
 **Deux lignes par port, six broches chacun.** La régularité du résultat est en soi un argument, et
 elle explique la rotation apparente du groupe P3 relevée dans la table de chargement.
 
-Reste une inférence : que le firmware range les octets reçus sans les permuter. C'est
-l'implémentation naturelle, et le fait que la permutation vive dans la table de registres plutôt
-que dans les données va dans ce sens. À confirmer sur matériel en n'allumant qu'une voie.
+**Ce n'est plus une inférence.** Le convertisseur d'usine `0x765B` lit le framebuffer 8 bits en
+`0x0152 + colonne × 18 + ligne × 3 + couleur` et écrit le tampon 16 bits en
+`0x05A2 + colonne × 36 + ligne × 6 + couleur × 2` : le **même** indexage `(ligne, couleur)` des deux
+côtés, sans permutation. Et la table de phases `CODE 0x2922`, indexée elle aussi `ligne × 3 +
+couleur`, se retrouve octet pour octet dans les `DUTY1` posés à l'init, permutés par exactement
+l'ordre de chargement ci-dessus. La correspondance est lue, pas supposée ; l'essai sur matériel que
+demandait la rédaction précédente n'est plus nécessaire.
 
 ### L'inadéquation d'architecture avec SMK — levée
 
@@ -247,9 +251,13 @@ Soit :
 
 > **`DUTY2 = (valeur << 2) + phase[ligne × 3 + couleur]`**, avec `DUTY1` figé sur cette même phase.
 
-**Conséquence.** L'impulsion s'étend de `DUTY1` à `DUTY2`, donc sa largeur vaut `valeur << 2` : le
-rapport cyclique est **direct**, 0 = éteint (impulsion nulle, `DUTY2 = DUTY1`), 255 = 1020/1200 soit
-85 % de la période. Le décalage de phase, un cran par canal, étale les fronts montants des 18 voies
+**Conséquence, par monotonicité.** Ni le datasheet ni `src/platform/sh68f90/pwm.h` ne disent
+laquelle des deux arêtes ouvre l'impulsion — on n'en a pas besoin. `DUTY1` est figé et `DUTY2` croît
+avec la valeur ; sous la lecture opposée, la valeur 1 donnerait une impulsion de 1196 crans et la
+valeur 255 une de 180, soit une luminosité **décroissante** avec la valeur, discontinue en zéro.
+Absurde. L'impulsion va donc de `DUTY1` à `DUTY2`, sa largeur vaut `valeur << 2`, et le rapport
+cyclique est **direct** : 0 = éteint (impulsion nulle, `DUTY2 = DUTY1`), 255 = 1020/1200 soit 85 %
+de la période. Le décalage de phase, un cran par canal, étale les fronts montants des 18 voies
 au lieu de les faire coïncider ; il disparaît du résultat lumineux.
 
 L'indice qui allait vers le sens direct — `user_matrix_sinks_off()` tire les 18 broches au niveau
@@ -272,7 +280,8 @@ seulement sur les trois canaux de la ligne 5.
 - **Période PWM d'usine : `0x04B0` = 1200**, lue en `0x6707` (`PWM0PERDH=0x04`) et `0x670D`
   (`PWM0PERDL=0xB0`). Le portage `tiagoluizo` reprogramme la sienne à `0x0400` = 1024 et calcule
   ses rapports cycliques en conséquence (`0x0400 - (v << 2)`) — cohérent chez lui, mais **ce n'est
-  pas la valeur d'usine**.
+  pas la valeur d'usine**, et son inversion est contredite par le relevé de `DUTY1` ci-dessus. Son
+  facteur `v << 2`, en revanche, est exactement celui de l'usine.
 - Rapport cyclique **direct** : `DUTY2 = (v << 2) + phase`, `DUTY1` = phase, donc largeur
   d'impulsion `v << 2` — 0 = éteint, 255 = 85 % de la période. Établi sur le dump (voir ci-dessus) ;
   une rédaction antérieure de cette page concluait « inversé », c'était faux.

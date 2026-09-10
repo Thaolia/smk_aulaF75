@@ -40,10 +40,15 @@
  * Deux lignes par port, six broches chacun : la régularité du résultat est en
  * elle-même un argument, et elle explique la rotation apparente du groupe P3.
  *
- * Reste une inférence : que le firmware d'usine range les octets reçus dans son
- * framebuffer sans les permuter. C'est l'implémentation naturelle, et le fait
- * que la permutation vive dans la table de registres plutôt que dans les données
- * va dans ce sens. À confirmer sur matériel en n'allumant qu'une voie.
+ * CE N'EST PLUS UNE INFÉRENCE. Le convertisseur d'usine 0x765B lit le
+ * framebuffer 8 bits en `0x0152 + colonne * 18 + ligne * 3 + couleur` et écrit
+ * le tampon 16 bits en `0x05A2 + colonne * 36 + ligne * 6 + couleur * 2` : le
+ * MÊME indexage `(ligne, couleur)` des deux côtés, sans permutation. Et la
+ * table de phases `CODE 0x2922`, indexée elle aussi `ligne * 3 + couleur`, se
+ * retrouve octet pour octet dans les DUTY1 posés à l'init -- permutés par
+ * exactement l'ordre de chargement ci-dessus. La correspondance est lue, pas
+ * supposée ; la rédaction précédente renvoyait à un essai sur matériel qui
+ * n'est plus nécessaire.
  */
 
 /*
