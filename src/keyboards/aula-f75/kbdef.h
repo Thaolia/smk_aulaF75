@@ -171,6 +171,7 @@ enum custom_keycodes {
     BRI_DN,               /* luminosité - */
     SPD_UP,               /* vitesse + */
     SPD_DN,               /* vitesse - */
+    CLR_NEXT,             /* couleur suivante : 0-6 fixes, 7 arc-en-ciel */
 
     /*
      * Emplacements Bluetooth. Le transport lui-même vient de la glissière, pas

@@ -29,6 +29,16 @@
 #define AULA_FX_PALETTE_SIZE 128
 void aula_fx_palette(uint8_t index, uint8_t out[3]);
 
+/*
+ * Modes de couleur d'usine : 0 à 6 sont des couleurs fixes (CODE 0xC800), 7 est
+ * l'arc-en-ciel, qui lit la roue de teintes au lieu de la palette. Le firmware
+ * d'usine range ce mode dans `b1[3:0]` de son enregistrement par effet, et le
+ * verrouille en XRAM 0x0897.
+ */
+#define AULA_FX_COLOR_MODES  8
+#define AULA_FX_COLOR_WHEEL  ((uint8_t)(AULA_FX_COLOR_MODES - 1))
+void aula_fx_color(uint8_t mode, uint8_t out[3]);
+
 /* Couronnes de l'onde concentrique, CODE 0x2959 : 9 groupes de 13 identifiants,
  * `0xFF` = emplacement vide. Lues par le moteur d'indice 1 (et d'indice 17, qui
  * est le même moteur avec le paramètre figé à 9). */

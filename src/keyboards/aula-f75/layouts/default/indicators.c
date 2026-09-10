@@ -541,6 +541,34 @@ static uint8_t led_scale(uint8_t value, uint8_t gain)
     return (uint8_t)(((uint16_t)value * gain) >> 8);
 }
 
+/*
+ * LE CHOIX DE COULEUR D'USINE.
+ *
+ * Le firmware d'usine ne rend pas tout en arc-en-ciel : chacun de ses effets
+ * porte un mode de couleur sur quatre bits, `b1[3:0]`, verrouillé en XRAM
+ * 0x0897, et son rendu se lit d'une ligne (`0x60C9`, `0x6C9B`) :
+ *
+ *     couleur = (mode == 7) ? roue[phase] : palette[effet][mode]
+ *
+ * Les modes 0 à 6 sont les sept couleurs fixes de `CODE 0xC800` -- identiques
+ * pour les dix-huit effets --, le mode 7 est l'arc-en-ciel, et lui seul lit la
+ * roue de teintes. Ce portage ne rendait que le mode 7 ; les huit y sont.
+ *
+ * Le mode vit dans `user_settings.ul_effect`, un octet que la structure partagée
+ * réserve à l'éclairage d'ambiance -- que ce clavier n'a pas. Le réemployer
+ * évite d'allonger `user_settings_t`, ce qui ferait retomber TOUS les réglages
+ * enregistrés aux valeurs par défaut au premier démarrage (`nvm.c` compare la
+ * longueur du bloc).
+ */
+static void fx_color(uint8_t wheel_index, uint8_t out[3])
+{
+    if (user_settings.ul_effect >= AULA_FX_COLOR_WHEEL) {
+        aula_rgb_wheel(wheel_index, out);
+    } else {
+        aula_fx_color(user_settings.ul_effect, out);
+    }
+}
+
 static void led_regen_one(void)
 {
     const uint8_t gain = led_brightness_gain[user_settings.led_brightness];
@@ -558,7 +586,7 @@ static void led_regen_one(void)
         } else {
             const uint8_t k = led_scale(val, gain);
 
-            aula_rgb_wheel(spark_hue[regen_col][regen_row], rgb);
+            fx_color(spark_hue[regen_col][regen_row], rgb);
             aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], k), led_scale(rgb[1], k),
                          led_scale(rgb[2], k));
             if (spark_decay_due) {
@@ -577,7 +605,7 @@ static void led_regen_one(void)
         const uint8_t hue = (uint8_t)((led_phase + (uint8_t)(regen_row * 25u)) %
                                       AULA_RGB_WHEEL_SIZE);
 
-        aula_rgb_wheel(hue, rgb);
+        fx_color(hue, rgb);
         aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
                      led_scale(rgb[2], gain));
     } else if (user_settings.led_effect == AULA_FX_KEYWAVE) {
@@ -597,7 +625,11 @@ static void led_regen_one(void)
          */
         const uint8_t idx = (uint8_t)(aula_fx_keywave(regen_col, regen_row) + led_phase);
 
-        aula_fx_palette(idx, rgb);
+        if (user_settings.ul_effect >= AULA_FX_COLOR_WHEEL) {
+            aula_fx_palette(idx, rgb); /* la seconde roue d'usine, 128 teintes */
+        } else {
+            aula_fx_color(user_settings.ul_effect, rgb);
+        }
         aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
                      led_scale(rgb[2], gain));
     } else if (user_settings.led_effect == AULA_FX_GAMING) {
@@ -609,14 +641,23 @@ static void led_regen_one(void)
 
         aula_rgb_set(regen_row, regen_col, 0, 0, lit ? gain : 0);
     } else if (user_settings.led_effect == (uint8_t)FX_SOLID) {
-        aula_rgb_set(regen_row, regen_col, gain, gain, gain); /* blanc */
+        /*
+         * Le blanc en dur était une invention : l'effet d'usine d'indice 3
+         * (`0x9DA4`) est « une matrice d'une seule couleur, teinte calculée hors
+         * boucle ». Cette couleur, c'est le choix de couleur -- la roue à la
+         * phase courante en arc-en-ciel, la couleur fixe sinon. Le blanc reste
+         * accessible : c'est le mode 6.
+         */
+        fx_color(led_phase, rgb);
+        aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
+                     led_scale(rgb[2], gain));
     } else {
         /* Géométrie de SMK, couleurs d'usine : l'index sur 0-255 est ramené aux
          * 192 entrées de la roue. */
         const uint8_t idx =
             led_effect_index((led_effect_t)user_settings.led_effect, regen_row, regen_col, led_phase);
 
-        aula_rgb_wheel((uint8_t)(((uint16_t)idx * AULA_RGB_WHEEL_SIZE) >> 8), rgb);
+        fx_color((uint8_t)(((uint16_t)idx * AULA_RGB_WHEEL_SIZE) >> 8), rgb);
         aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
                      led_scale(rgb[2], gain));
     }
@@ -704,6 +745,7 @@ void indicators_apply_defaults(void)
     user_settings.led_effect     = FX_RADIAL;
     user_settings.led_brightness = LED_BRIGHTNESS_DEFAULT;
     user_settings.led_speed      = LED_SPEED_DEFAULT;
+    user_settings.ul_effect      = AULA_FX_COLOR_WHEEL; /* arc-en-ciel, comme en usine */
 }
 
 void indicators_validate_settings(void)
@@ -716,6 +758,9 @@ void indicators_validate_settings(void)
     }
     if (user_settings.led_speed >= LED_SPEED_LEVELS) {
         user_settings.led_speed = LED_SPEED_DEFAULT;
+    }
+    if (user_settings.ul_effect >= AULA_FX_COLOR_MODES) {
+        user_settings.ul_effect = AULA_FX_COLOR_WHEEL;
     }
 }
 
@@ -736,6 +781,14 @@ void indicators_start(void)
 }
 
 /* ------------------------------------------------------- actions clavier */
+
+void indicators_next_color(void)
+{
+    if (++user_settings.ul_effect >= AULA_FX_COLOR_MODES) {
+        user_settings.ul_effect = 0;
+    }
+    settings_mark_dirty();
+}
 
 void indicators_next_effect(void)
 {

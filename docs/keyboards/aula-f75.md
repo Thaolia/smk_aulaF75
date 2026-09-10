@@ -1464,6 +1464,53 @@ inversé.
 > La question n'est donc pas « quelles couleurs » mais « dans quel sens tourne l'arc-en-ciel », et
 > le coût de se tromper se limite au sens de rotation. Le portage retient `(R,G,B)`, ce que font
 > cinq des six moteurs.
+>
+> **Un second argument, faible mais indépendant, va dans le même sens.** La palette de couleurs
+> fixes de `CODE 0xC800` est lue par les mêmes moteurs, dans le même format, et vaut
+> `ff 00 00 · 00 ff 00 · 00 00 ff · ff ff 00 · ff 00 ff · 00 ff ff · ff ff ff`. Le *jeu* de sept
+> couleurs est lui aussi symétrique par échange R↔B — il ne tranche pas non plus. Mais leur
+> **ordre** parle : lu en `(R,G,B)` c'est rouge, vert, bleu, puis les trois mélanges deux à deux,
+> puis le blanc — l'énumération canonique. Lu en `(B,G,R)` la même table donne bleu, vert, rouge,
+> cyan, magenta, jaune, blanc : un ordre que personne n'écrit spontanément. C'est une convention,
+> pas une preuve ; elle ne fait qu'ajouter son poids au vote des moteurs.
+
+#### Le choix de couleur — les huit modes, portés
+
+Le rendu d'usine ne passe pas systématiquement par la roue. Chaque effet porte un **mode de couleur**
+sur quatre bits, `b1[3:0]`, verrouillé en `XRAM 0x0897`, et les moteurs se lisent d'une ligne
+(`0x60C9`, `0x6C9B`) :
+
+```c
+couleur = (mode == 7) ? roue[phase] : palette[effet][mode];
+```
+
+- **modes 0 à 6** — les sept couleurs fixes de `CODE 0xC800`, vingt-et-un octets par effet. Fait
+  notable : **les dix-huit effets portent exactement les mêmes vingt-et-un octets**. L'indexation
+  par effet existe dans le format et ne sert à rien ; une seule table de sept suffit.
+- **mode 7** — l'arc-en-ciel, le seul qui lise la roue de teintes.
+
+Le portage ne rendait que le mode 7. Les huit y sont désormais, sous le keycode `CLR_NEXT`. Le mode
+vit dans `user_settings.ul_effect`, l'octet que la structure partagée réserve à l'éclairage
+d'ambiance — que ce clavier n'a pas : le réemployer évite d'allonger `user_settings_t`, ce qui ferait
+retomber **tous** les réglages enregistrés aux valeurs par défaut au premier démarrage, `nvm.c`
+comparant la longueur du bloc.
+
+Conséquence directe : `FX_SOLID` ne rend plus un blanc écrit en dur — invention désormais retirée —
+mais la couleur choisie, la roue à la phase courante en arc-en-ciel. Le blanc reste accessible, c'est
+le mode 6.
+
+#### Les trois tables de couleur, vérifiées octet par octet
+
+| Table | Adresse | Taille | Rôle |
+| --- | --- | --- | --- |
+| roue de teintes | `CODE 0x2B2A` | 192 × 3 = 576 o | l'arc-en-ciel, mode 7 |
+| seconde roue | `CODE 0x2D6D` | 128 × 3 = 384 o | la vague par touche (effet 15) |
+| couleurs fixes | `CODE 0xC800` | 7 × 3 = 21 o | les modes 0 à 6 |
+
+Les trois sont recopiées **telles quelles** dans le portage, et la comparaison octet par octet avec
+`assets/f75_full_jtag.bin` passe pour les trois. La seconde roue se referme d'elle-même :
+`0x2D6D + 384 = 0x2EED`, exactement la base de la table A du champ de phase — deux relevés
+indépendants qui se touchent sans recouvrement ni trou.
 
 ### `XRAM 0x009D` — index d'effet RGB
 

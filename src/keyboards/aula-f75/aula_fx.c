@@ -42,6 +42,37 @@ static const __code uint8_t palette[AULA_FX_PALETTE_SIZE][3] = {
     { 50,  0,255}, { 31,  0,255}, { 16,  0,255}, {  5,  0,255},
 };
 
+/*
+ * Les sept couleurs fixes, CODE 0xC800.
+ *
+ * Le firmware d'usine range vingt-et-un octets par effet -- sept triplets -- et
+ * les DIX-HUIT effets portent exactement les mêmes vingt-et-un octets. Une seule
+ * table de sept suffit donc ; l'indexation par effet du firmware n'apporte rien
+ * qu'il n'utilise pas.
+ *
+ * Ce sont les sept canoniques : les trois primaires, leurs trois mélanges deux à
+ * deux, puis le blanc. Le mode 7, lui, ne lit pas cette table -- c'est
+ * l'arc-en-ciel, qui prend la roue de `aula_rgb_wheel()`.
+ */
+static const __code uint8_t colors[AULA_FX_COLOR_MODES - 1][3] = {
+    {255,   0,   0}, /* rouge   */
+    {  0, 255,   0}, /* vert    */
+    {  0,   0, 255}, /* bleu    */
+    {255, 255,   0}, /* jaune   */
+    {255,   0, 255}, /* magenta */
+    {  0, 255, 255}, /* cyan    */
+    {255, 255, 255}, /* blanc   */
+};
+
+void aula_fx_color(uint8_t mode, uint8_t out[3])
+{
+    const uint8_t i = (mode < (uint8_t)(AULA_FX_COLOR_MODES - 1)) ? mode : 0;
+
+    out[0] = colors[i][0];
+    out[1] = colors[i][1];
+    out[2] = colors[i][2];
+}
+
 void aula_fx_palette(uint8_t index, uint8_t out[3])
 {
     const uint8_t i = (uint8_t)(index & (uint8_t)(AULA_FX_PALETTE_SIZE - 1));
