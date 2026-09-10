@@ -4,6 +4,7 @@
 #include "interrupts.h"
 #include "delay.h"
 #include "usb.h"
+#include "usbhw.h"
 #include "keyboard.h"
 #include <string.h>
 
@@ -50,11 +51,32 @@ _Static_assert(FREQ_SYS / 92 > 255000 && FREQ_SYS / 92 < 267000, "FREQ_SYS incom
 #define RF_TX_MAX 32
 
 /*
- * Les trames reçues font 22 octets : `euart0_parse` somme les octets 0 à 20 et
- * compare à l'octet 21 (0x05EA, vérifié au décompilateur). Le firmware d'usine
- * réserve 23 octets ; le vingt-troisième ne sert à rien ici.
+ * Réception : le firmware d'usine ne découpe PAS les trames dans son ISR.
+ *
+ * Son ISR (0xA544) empile les octets dans un tampon IDATA de 23 octets
+ * (0x54-0x6A), jette tout ce qui dépasse, et pose un simple drapeau « octet
+ * reçu » (0x24.4). Un étage différé (`fcn.000005EA`) recopie les 23 octets vers
+ * XDATA 0x0120, et c'est `euart0_parse` qui dispatche sur l'octet 0 et vérifie
+ * la somme À LA POSITION PROPRE AU TYPE :
+ *
+ *   0x02  trame d'état  10 octets, somme = 0x55 - Σ[0..8],  comparée à [9]
+ *   0x08  conteneur     22 octets, somme = 0x55 - Σ[0..20], comparée à [21]
+ *   0x03  annonce       AUCUNE somme vérifiée, longueur non établie
+ *
+ * Une première rédaction de ce fichier attendait 22 octets pour TOUTES les
+ * trames et sommait les 21 premiers : le format de la seule 0x08. Une trame
+ * d'état de dix octets restait donc en attente, les octets de la suivante
+ * complétaient le tampon, la somme échouait toujours, et la liaison était
+ * déclarée morte en permanence.
  */
-#define RF_RX_FRAME_LEN 22
+#define RF_RX_MAX 23 /* le tampon d'usine, IDATA 0x54-0x6A */
+
+#define RF_RX_LEN_STATUS 10
+#define RF_RX_LEN_BULK   22
+
+#define RF_RX_TYPE_STATUS   0x02
+#define RF_RX_TYPE_ANNOUNCE 0x03
+#define RF_RX_TYPE_BULK     0x08
 
 #define RF_HDR      0x01 /* octet 0, constant dans les deux sens */
 #define RF_SUM_SEED 0x55 /* somme = 0x55 - Σ, même constante aux deux sens */
@@ -97,9 +119,9 @@ static volatile __data uint8_t  tx_len;
 static volatile __data uint8_t  tx_idx;
 static volatile __bit           tx_busy;
 
-static __xdata uint8_t         rx_buf[RF_RX_FRAME_LEN];
+static __xdata uint8_t         rx_buf[RF_RX_MAX];
 static volatile __data uint8_t rx_idx;
-static volatile __bit          rx_ready;
+static volatile __bit          rx_pending;
 
 /*
  * Seuls tx_len/tx_idx/rx_idx restent en DATA : l'ISR les touche à chaque octet.
@@ -180,19 +202,17 @@ void rf_euart0_interrupt_handler(void) __interrupt(_INT_EUART0)
     }
 
     if (RI) {
-        RI            = 0;
-        uint8_t byte  = SBUF;
-
-        if (rx_ready) {
-            /* La trame précédente n'a pas encore été consommée : on la garde. */
-            return;
-        }
-        if (rx_idx < RF_RX_FRAME_LEN) {
+        RI = 0;
+        /*
+         * Empiler et signaler, rien d'autre — comme l'ISR d'usine, qui jette
+         * silencieusement ce qui dépasse son tampon. Le découpage appartient à
+         * `rf_rx_consume()`, seul endroit qui connaisse le format des types.
+         */
+        const uint8_t byte = SBUF;
+        if (rx_idx < RF_RX_MAX) {
             rx_buf[rx_idx++] = byte;
         }
-        if (rx_idx >= RF_RX_FRAME_LEN) {
-            rx_ready = 1;
-        }
+        rx_pending = 1;
     }
 }
 
@@ -344,40 +364,84 @@ void rf_send_extra(__xdata report_extra_t *report)
 
 /* ---------------------------------------------------------------- réception */
 
-static void rf_rx_consume(void)
+/* Somme d'usine : 0x55 - Σ des `len` premiers octets, comparée à l'octet `len`. */
+static bool rf_rx_checksum_ok(uint8_t len)
 {
     uint8_t sum = RF_SUM_SEED;
 
-    if (!rx_ready) {
+    for (uint8_t i = 0; i < len; i++) {
+        sum -= rx_buf[i];
+    }
+    return sum == rx_buf[len];
+}
+
+/* Vide le tampon, l'IRQ masquée : sans ça un octet arrivé entre le test et la
+ * remise à zéro se retrouverait attribué à la trame suivante. */
+static void rf_rx_drop(void)
+{
+    const bool armed = (IEN1 & _ES0) != 0;
+
+    IEN1 &= (uint8_t)~_ES0;
+    rx_idx     = 0;
+    rx_pending = 0;
+    if (armed) {
+        IEN1 |= _ES0;
+    }
+}
+
+static void rf_rx_consume(void)
+{
+    if (!rx_pending) {
         return;
     }
 
-    for (uint8_t i = 0; i < (RF_RX_FRAME_LEN - 1); i++) {
-        sum -= rx_buf[i];
-    }
+    switch (rx_buf[0]) {
+        case RF_RX_TYPE_STATUS:
+            if (rx_idx < RF_RX_LEN_STATUS) {
+                return; /* trame incomplète : on laisse le reste arriver */
+            }
+            /*
+             * Les deux gardes du firmware d'usine, avant même la somme :
+             * l'octet 1 vaut 6 (c'est la réponse à la commande 0x06) et
+             * l'octet 2 est imposé à 0.
+             */
+            if (rx_buf[1] == RF_CMD_STATUS && rx_buf[2] == 0 &&
+                rf_rx_checksum_ok(RF_RX_LEN_STATUS - 1)) {
+                /*
+                 * INFÉRÉ : « une trame d'état valide vient d'arriver » vaut
+                 * preuve de lien. Le champ qui porte vraiment la connexion est
+                 * l'octet 5, mais le firmware d'usine ne le lit que dans une
+                 * condition composée avec l'octet 4 — le décoder demande de
+                 * distinguer les transports, ce qui viendra avec la batterie.
+                 */
+                link_connected = 1;
+                probe_answered = 1;
+            }
+            break;
 
-    if (sum == rx_buf[RF_RX_FRAME_LEN - 1]) {
-        /*
-         * Trame d'état : type 0x02, sous-type 0x06 — la réponse à la commande
-         * 0x06. INFÉRÉ : on prend « une trame d'état valide vient d'arriver »
-         * comme preuve de lien. Le champ exact qui porte l'état de connexion
-         * n'est pas établi ; le firmware d'usine le teste quelque part dans
-         * `euart0_parse`, mais le bit n'a pas été isolé.
-         */
-        if (rx_buf[0] == 0x02) {
-            link_connected = 1;
+        case RF_RX_TYPE_BULK:
+            if (rx_idx < RF_RX_LEN_BULK) {
+                return;
+            }
+            (void)rf_rx_checksum_ok(RF_RX_LEN_BULK - 1);
+            /* Conteneur à sous-commandes : rien n'en dépend dans ce portage. */
+            break;
+
+        case RF_RX_TYPE_ANNOUNCE:
+            /*
+             * Annonce de connexion. Le firmware d'usine ne vérifie aucune somme
+             * ici et sa longueur n'est pas établie ; on se contente du type, qui
+             * prouve que le module parle.
+             */
             probe_answered = 1;
-        }
+            break;
+
+        default:
+            /* Type inconnu : on jette plutôt que de tenter un recalage. */
+            break;
     }
 
-    /*
-     * Pas de délimiteur de trame sur cette liaison : un octet perdu
-     * désynchronise le découpage jusqu'au prochain silence. On repart de zéro
-     * plutôt que de tenter un recalage, faute de savoir comment le firmware
-     * d'usine s'y prend.
-     */
-    rx_idx   = 0;
-    rx_ready = 0;
+    rf_rx_drop();
 }
 
 /* ------------------------------------------------------- machine à états */
@@ -398,8 +462,8 @@ static void rf_uart_init(void)
     tx_busy  = 0;
     tx_idx   = 0;
     tx_len   = 0;
-    rx_idx   = 0;
-    rx_ready = 0;
+    rx_idx     = 0;
+    rx_pending = 0;
 
     /* Handshake au repos : P0.2 en entrée, relâché. */
     P0CR &= (uint8_t)~0x04;
@@ -437,15 +501,25 @@ static void rf_tx_drain(void)
  *
  * La deuxième instruction manquait à une première rédaction de ce fichier : en
  * sans-fil le firmware d'usine COUPE le périphérique USB, il ne se contente pas
- * d'ignorer l'hôte. `usb_deinit()` fait la même coupure — `usb_hw_deinit()`
- * retombe `_ENUSB | _SW1CON | _SW2CON` — et désarme en plus l'interruption USB,
- * ce qui sur SMK est nécessaire : son ISR continuerait sinon à tourner sur un
- * module éteint.
+ * d'ignorer l'hôte.
+ *
+ * On appelle `usb_hw_deinit()` et NON `usb_deinit()`. Les deux retombent
+ * `_ENUSB | _SW1CON | _SW2CON` et désarment l'interruption USB, mais
+ * `usb_deinit()` remet en plus toute la machine à états logicielle à zéro — dont
+ * `interface0_protocol`. Or `host_nkro_active()` (`src/smk/host.c:12`) exige
+ * `USB_PROTOCOL_REPORT` : le remettre à zéro fait retomber le clavier en 6KRO
+ * pour toute la durée du mode sans-fil, alors que `NKRO_REPORT_BITS` vaut 20
+ * précisément « limited by wireless dongle hid descriptor » (`report.h:10`).
+ *
+ * Ne couper que le matériel est donc à la fois plus fidèle au firmware d'usine —
+ * qui n'exécute qu'un `anl USBCON,#0x7F` — et la seule façon de garder le NKRO
+ * sur la radio. L'état logiciel est reconstruit par `usb_init()` au retour au
+ * filaire.
  */
 static void rf_radio_on(void)
 {
     IEN1 |= _ES0;
-    usb_deinit();
+    usb_hw_deinit();
     delay_ms(20);
 }
 
@@ -634,6 +708,12 @@ static void rf_probe_task(void)
         link_connected = 0;
         /* Le firmware d'usine relâche ici la ligne d'émission (0x3D5A). */
         rf_tx_drain();
+        /*
+         * Et on jette ce qui traîne en réception : une trame tronquée dont le
+         * type annonce une longueur qui n'arrivera jamais bloquerait le tampon
+         * indéfiniment, puisque `rf_rx_consume()` attend le compte.
+         */
+        rf_rx_drop();
     }
 
     probe_answered = 0;

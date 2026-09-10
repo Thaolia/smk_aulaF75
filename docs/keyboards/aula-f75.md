@@ -3881,9 +3881,35 @@ Trois écarts assumés par rapport au firmware d'usine, chacun commenté sur pla
 2. **La commande `0x01` est mise en file**, pas émise une fois pour toutes. Le firmware d'usine la
    perd si `P4.7` est bas à cet instant précis ; `rf_task()` la rejoue dès que le module se
    déclare prêt.
-3. **`usb_deinit()` remplace le seul `anl USBCON,#0x7F`** : même coupure du module, plus le
+3. **`usb_hw_deinit()` à la place du seul `anl USBCON,#0x7F`** : même coupure du module, plus le
    désarmement de l'interruption USB — sans quoi l'ISR de SMK continuerait à tourner sur un
    périphérique éteint.
+
+#### Trois défauts corrigés après coup
+
+Une relecture croisée du pilote contre cette page en a sorti trois, dont un qui rendait la
+détection de lien inopérante.
+
+**1. La longueur des trames reçues dépend du type.** La première rédaction attendait 22 octets pour
+toutes les trames et sommait les 21 premiers — le format de la seule `0x08`. Une trame d'état de
+dix octets restait donc en attente, les octets de la suivante complétaient le tampon, la somme
+échouait toujours, et la sonde de présence déclarait le lien mort en permanence.
+
+Le firmware d'usine ne découpe pas non plus dans son ISR : elle empile dans 23 octets d'IDATA et
+jette le dépassement ; c'est `euart0_parse` qui dispatche sur l'octet 0 et vérifie la somme **à la
+position propre au type**. Le portage fait désormais pareil, avec les deux gardes d'usine sur les
+octets 1 et 2 de la trame d'état.
+
+**2. `usb_deinit()` tuait le NKRO en sans-fil.** Il remet toute la machine à états USB à zéro, dont
+`interface0_protocol`, et `host_nkro_active()` exige `USB_PROTOCOL_REPORT`. Le clavier retombait
+donc en 6KRO dès l'entrée en mode sans-fil, alors que `NKRO_REPORT_BITS` vaut 20 *« limited by
+wireless dongle hid descriptor »*. `usb_hw_deinit()` ne coupe que le matériel — plus fidèle au
+`anl USBCON,#0x7F` d'usine, et le NKRO survit.
+
+**3. Deux défauts dans `aula_rgb.c`**, encore inactif à ce stade : `value * (0x04B0 / 255)` — la
+division entière vaut **4**, donc l'intensité maximale donnait un rapport cyclique de 180 au lieu
+de 0 ; et deux tables d'adresses `const __xdata` de 72 octets remplacées par les jetons
+`SET_PWM_DUTY_2` de `platform/sh68f90/pwm.h`.
 
 Coût mesuré à la compilation (SDCC 4.5.0, zéro avertissement, `check_interrupts` OK) :
 **+251 o de flash**, **+4 o de XDATA**, **3 o de RAM interne** — la marge interne passe de 22 à
