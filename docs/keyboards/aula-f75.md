@@ -70,7 +70,7 @@ n'en peuple que 15. C'est bien **15** colonnes physiques.
 | Câblage du rendu dans la boucle SMK | ✅ **résolu** — sous-trames LED de `tick.c`, voir ci-dessous |
 | Rotation d'encodeur | ❌ non implémentée (phases identifiées : `P0.5` / `P0.6`) |
 | Broches au rôle inconnu | ❓ `P0.0` `P0.1` `P4.1` `P4.4` `P5.5` `P5.6` `P7.7` — `P7.4`/`P4.5` sont le sélecteur de connexion, `P4.7` la ligne « module prêt » |
-| Veille | ✅ **implémentée** — transcrite du firmware d'usine, non testée sur matériel |
+| Veille | ✅ **implémentée**, USB **et radio** — transcrite du firmware d'usine, non testée sur matériel |
 | Sans-fil 2,4 GHz / Bluetooth | ⚠️ **écrit et compilé** (`aula_rf.c`, EUART0), **jamais exécuté** — voir ci-dessous |
 
 ## Matrice : 81 touches, pas 80 — l'encodeur
@@ -1123,6 +1123,40 @@ documente** comme « transcrites du firmware d'usine » — confirmation indépe
 6 lignes (`P7CR`/`P7PCR` bits 0-3, `P5CR`/`P5PCR` bits 3-4) puis les 15 colonnes, dans l'ordre.
 
 ⚠️ **Non testée sur matériel.** Un parking faux = un clavier qui ne se réveille pas.
+
+### La veille radio, ajoutée après coup
+
+Le portage rendait `USER_SLEEP_USB` **en dur**, avec le commentaire « Pas de sans-fil sur ce
+portage ». La conséquence n'était pas cosmétique : `sleep.c` décide de l'endormissement par la
+**suspension du bus USB** en mode `USB`, et par son **compteur d'inactivité** en mode `RF` — et hors
+mode `RF` il remet ce compteur à zéro à chaque passage. Autrement dit, **le clavier n'avait aucune
+veille sur batterie.**
+
+Le crochet suit désormais le sélecteur en direct, comme le NuPhy Air60 le fait du sien.
+`sleep_task()` l'interroge à chaque passage, donc glisser le sélecteur change le critère
+immédiatement.
+
+Autour de `power_enter_powerdown()`, deux ajouts transcrits :
+
+| Moment | Firmware d'usine | Portage |
+| --- | --- | --- |
+| avant | `fcn.00007D74` / `fcn.00009E39` coupent l'EUART0 (SCON, IEN1) | `rf_sleep_prepare()` : vidange l'émission, puis `IEN1 &= ~ES0` et `SCON = 0` |
+| après | les deux chemins de réveil (`0x7E85`, `0x9EBF`) rappellent l'init `0xB1C2` | `rf_sleep_wake()` : `rf_uart_init()` puis réarmement de l'IRQ |
+
+La vidange préalable est un ajout : une rafale interrompue par la mise en veille laisserait
+`tx_busy` armé et **`P0.2` bloqué bas en sortie**, donc le module tenu en requête d'émission
+pendant tout le sommeil.
+
+Et le réveil réaffirme le transport sans attendre la sonde suivante — c'est la règle du superviseur
+d'usine (« pas connecté, donc on redemande »), appliquée à un moment où l'on sait que l'état
+mémorisé ne vaut plus rien.
+
+> **Un point signalé à tort.** Une relecture avait conclu que `park_panel()` avait un défaut en
+> mettant `P7.4` et `P4.5` — les deux broches du sélecteur — en sortie basse. Vérification faite,
+> ce parking est **transcrit du firmware d'usine** (`0x7DCB`-`0x7DF1`), et `user_gpio_init()` les
+> rend au sélecteur au réveil : `P4CR=0x4D` et `P7CR=0x60` les laissent toutes deux en entrée, avec
+> pull-up (`P4PCR=0x6F`, `P7PCR=0xDF`). Il n'y avait rien à corriger — seulement un ordre à
+> respecter, `rf_sleep_wake()` après `user_gpio_init()`.
 
 ## Le BK3632 — ce qu'on sait, et avec quel degré de certitude
 

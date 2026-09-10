@@ -76,6 +76,13 @@ void    rf_set_bt_slot(uint8_t slot);
  */
 void rf_request_pairing(void);
 
+/*
+ * À appeler depuis `user_sleep_prepare()` / `user_sleep_wake()`, autour de
+ * `power_enter_powerdown()`. Sans effet en mode filaire.
+ */
+void rf_sleep_prepare(void);
+void rf_sleep_wake(void);
+
 void rf_send_report(__xdata report_keyboard_t *report);
 void rf_send_nkro(__xdata report_nkro_t *report);
 void rf_send_extra(__xdata report_extra_t *report);

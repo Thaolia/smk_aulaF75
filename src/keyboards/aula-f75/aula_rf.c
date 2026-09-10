@@ -968,6 +968,44 @@ void rf_set_bt_slot(uint8_t slot)
     }
 }
 
+/*
+ * Veille. Le firmware d'usine coupe l'EUART0 avant de s'endormir (`fcn.00007D74`
+ * et `fcn.00009E39`, SFR touchés SCON et IEN1) et **reconfigure la liaison de
+ * bout en bout au réveil** : les deux chemins de sortie de veille, `0x7E85` et
+ * `0x9EBF`, rappellent tous deux l'init `0xB1C2`. C'est exactement ce que fait
+ * `rf_uart_init()`.
+ *
+ * On y ajoute la vidange de l'émission : une rafale interrompue par la mise en
+ * veille laisserait `tx_busy` armé et `P0.2` bloqué bas en sortie, donc le
+ * module tenu en requête pendant tout le sommeil.
+ */
+void rf_sleep_prepare(void)
+{
+    if (!rf_is_wireless()) {
+        return;
+    }
+    rf_tx_drain();
+    IEN1 &= (uint8_t)~_ES0;
+    SCON = 0;
+}
+
+void rf_sleep_wake(void)
+{
+    if (!rf_is_wireless()) {
+        return;
+    }
+    rf_uart_init();
+    IEN1 |= _ES0;
+
+    /*
+     * L'état de liaison d'avant le sommeil ne vaut plus rien. On applique la
+     * règle du superviseur d'usine — « pas connecté, donc on redemande le
+     * transport » — sans attendre la prochaine sonde, qui est lente.
+     */
+    link_connected = 0;
+    rf_queue_link(RF_LINK_SELECT);
+}
+
 void rf_request_pairing(void)
 {
     if (rf_is_wireless()) {

@@ -5,6 +5,10 @@
 #include "gpio.h"
 #include "extint.h"
 
+#ifdef RF_EUART0
+#    include "aula_rf.h"
+#endif
+
 #ifdef SLEEP_ENABLE
 
 /*
@@ -29,10 +33,23 @@
  * réveille pas et qu'il faut reflasher.
  */
 
+/*
+ * Le mode suit le sélecteur en direct, comme chez le NuPhy Air60 :
+ * `sleep_task()` interroge ce crochet à CHAQUE passage.
+ *
+ * La distinction n'est pas cosmétique. En `USER_SLEEP_USB`, l'endormissement est
+ * décidé par la suspension du bus ; en `USER_SLEEP_RF`, il l'est par le
+ * compteur d'inactivité de `sleep.c` — et hors mode RF ce compteur est remis à
+ * zéro à chaque passage, donc il ne sert à rien. Rendre `USB` en dur, comme le
+ * faisait ce fichier, revenait à n'avoir aucune veille sur batterie.
+ */
 user_sleep_mode_t user_sleep_supported(void)
 {
-    /* Pas de sans-fil sur ce portage : la veille n'a de sens qu'en USB. */
+#ifdef RF_EUART0
+    return rf_is_wireless() ? USER_SLEEP_RF : USER_SLEEP_USB;
+#else
     return USER_SLEEP_USB;
+#endif
 }
 
 static void park_panel(void)
@@ -78,6 +95,9 @@ static void park_panel(void)
 
 void user_sleep_prepare(void)
 {
+#ifdef RF_EUART0
+    rf_sleep_prepare(); /* vidange l'émission puis coupe l'EUART0, comme 0x7D74 */
+#endif
     park_panel();
     extint_wake_arm(); /* IENC=0xF3, EXF0=0x40, EX4=1 -- mêmes valeurs qu'en usine */
 }
@@ -86,6 +106,15 @@ void user_sleep_wake(void)
 {
     extint_wake_disable();
     user_gpio_init();
+#ifdef RF_EUART0
+    /*
+     * APRÈS `user_gpio_init()`, et pas avant : c'est lui qui rend P7.4 et P4.5
+     * au sélecteur (P4CR=0x4D, P7CR=0x60 les laissent en entrée avec pull-up),
+     * broches que `park_panel()` tenait en sortie basse pendant le sommeil --
+     * comme le firmware d'usine en 0x7DCB-0x7DF1.
+     */
+    rf_sleep_wake();
+#endif
 }
 
 #endif // SLEEP_ENABLE
