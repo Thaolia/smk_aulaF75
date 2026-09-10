@@ -2127,10 +2127,77 @@ l'appairage » — cohérente avec les deux sites, mais c'est leur seule différ
 
 Trois actions temporisées, dont deux nouvelles :
 
-- **`0x2B.7`** → réinitialisation d'usine : `settings_save`, puis une séquence de clignotements
-  **bleu, vert, rouge** de 200 ms chacun via `rgb_fill_solid`. C'est le retour visuel du reset.
+- **`0x2B.7`** → réinitialisation d'usine. Le détail complet est plus bas, « L'effacement
+  d'appairages n'existe pas » : ce n'est pas seulement `settings_save` et le retour visuel.
 - **`0x2C.5`** → réaffirmation du lien, ci-dessus.
 - un compteur d'environ trente-deux passages → **commande `0x04` avec le paramètre 3**.
+
+#### Résolu : l'effacement d'appairages n'existe pas
+
+Cette page a longtemps porté « l'effacement d'appairages » comme point ouvert, avec pour seul
+candidat `fcn.0000929E`, « dont la zone remplie de `0xFF` n'est pas spécifiée ». **Le candidat est
+éliminé, et la réponse est négative** : ce firmware n'efface aucun appairage, parce qu'il n'envoie
+jamais rien au BK3632 qui puisse le faire.
+
+##### `fcn.0000929E` est l'initialisation RAM du démarrage
+
+Son unique appelant est `0x910D`, **dans `main`, sans condition**, entre `0xECC5` et
+`settings_restore` (`0xA283`). Les zones qu'il remplit sont maintenant lues : `0x0964` et `0x0994`
+(21 octets chacune) à `0xFF`, `0x089D` (21 octets), `0x009E` et `0x0DA1` (126 octets chacune) à zéro,
+plus 9 octets en `0x08B2` et 2 en `0x097D`. Ce sont les tableaux de couleur par touche en XRAM, mis
+à leur état neutre avant que les réglages ne soient relus depuis la flash. Rien à voir avec le
+Bluetooth.
+
+##### Ce que fait réellement le raccourci de réinitialisation
+
+Deux déclencheurs posent le bit `0x2B.7`, et le consommateur est `0x8725` dans le tic lent sans fil :
+
+| Déclencheur | Site | Comportement |
+| --- | --- | --- |
+| Raccourci clavier | `0x41BF` pose le bit puis remet le compteur `[0x0961:0x0962]` à zéro | le consommateur exige que ce compteur 16 bits atteigne **3000** : c'est un **appui long** |
+| Commande reçue | `0x0C53`, atteint par le sous-code **`0x05`** du conteneur `0x08` | pré-charge le compteur à **3001** et pose le bit : réinitialisation **immédiate, pilotée par l'hôte** |
+| Abandon | `0x44AE` efface le bit | touche relâchée trop tôt |
+
+Le sous-code `0x05` vient de la table de sauts inline de `0x085B`, lue par le répartiteur `0x4E45` :
+des triplets *(sous-code, adresse)* — `01→0x09BD`, `02→0x0AAC`, `03→0x0BB0`, `04→0x0C4A`,
+**`05→0x0C53`**, `06→0x0C68`, `09→0x0D10`, puis `41`…`4A`. Le jeu de sous-codes correspond
+exactement à celui que cette page relève côté émission, ce qui valide la lecture de la table.
+
+Et voici la séquence complète, `0x8728`–`0x8799`, **ses dix-huit appels énumérés** :
+
+| Appel | Rôle |
+| --- | --- |
+| `0xEF8D`, `0xEF46` | marquer les réglages modifiés + 20 ms d'attente |
+| `0xADA2` | `rgb_fill_solid(0,0,0)` — noir |
+| `0xA069` | `settings_save` |
+| **`0x91D3`** | restaure les couleurs par touche par défaut depuis `CODE 0xCB7A` vers `0x09BF`, `0x0A3D`, `0x0ABB` |
+| **`0x77A0`** | restaure la **disposition d'usine** : blocs de 512 octets depuis `CODE 0xB400`, `0xB600`, `0xB800`… vers `0x09BF`, puis écriture dans les pages IAP `0x66`, `0x67`, `0x68` via `0xAAC1` |
+| `0xADA2` ×6 + `0xED03` ×7 | bleu 200 ms, noir, vert, noir, rouge, noir |
+
+Puis `CLR 0x1B` (rétroéclairage éteint), `SETB 0x51` et `SETB 0x21` (rechargement et ressemis).
+
+**Aucun de ces dix-huit appels ne touche l'EUART0.** Pas une trame, pas une entrée dans la file
+d'émission. C'est une réinitialisation de **disposition et d'éclairage**, pas d'appairages.
+
+##### Pourquoi le négatif est solide
+
+Les appairages vivent dans le BK3632, pas dans le SH68F90 : les effacer demanderait une commande sur
+l'EUART0. Or les **onze** commandes émises ont toutes une sémantique établie, et la dernière dont
+cette page laissait le déclencheur à « — » est désormais placée : **`0x0C` est émise en `0x7D9B`,
+dans la préparation de veille** (`0x7D74`), avec les paramètres `7` et `8`, quand `[0x0E3B]` est non
+nul. Les codes `0x05`, `0x07` et `0x0A` ne sont **jamais** émis. Et les sous-opcodes du conteneur
+`0x08` (`0x05`, `0x0A`, `0x41`–`0x44`, `0x49`, `0x4A`) sont tous des transferts de données depuis
+`CODE` ou la zone IAP.
+
+Il ne reste donc aucune commande candidate. Le portage avait choisi de **ne pas inventer** de
+commande d'effacement ; ce n'était pas seulement prudent, c'était juste.
+
+##### Ce que le portage pourrait reprendre, et ne reprend pas
+
+La réinitialisation d'usine elle-même est portable — SMK a déjà `settings`, `indicators_apply_defaults()`
+et une disposition par défaut compilée. Ce serait une **fonctionnalité nouvelle**, pas la réponse à
+la question posée, et elle n'est pas ajoutée ici. La seule chose à retenir côté code est négative et
+déjà en place : il n'y a pas de commande d'effacement d'appairages à porter.
 
 #### Résolu : `0x031B` est un champ d'un bloc de réglages persisté
 
