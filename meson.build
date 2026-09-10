@@ -148,6 +148,7 @@ possible_src_keyboard = [
     'kb.c',
     # Sources optionnelles propres a un clavier ; ignorees si le fichier n'existe pas.
     'aula_rgb.c',
+    'aula_fx.c',
     'aula_rf.c'
 ]
 

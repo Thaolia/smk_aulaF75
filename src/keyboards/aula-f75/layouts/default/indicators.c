@@ -7,6 +7,7 @@
 #include "led_effect.h"
 #include "user_matrix.h"
 #include "aula_rgb.h"
+#include "aula_fx.h"
 
 /*
  * Rétroéclairage de l'AULA F75.
@@ -78,45 +79,253 @@ static const __code uint8_t led_speeds[] = {1, 2, 4, 8, 16};
  * le plus caractéristique du F75, et le seul qui demande de savoir QUELLE touche
  * a été frappée.
  */
-#define AULA_FX_REACTIVE ((uint8_t)FX_COUNT)       /* 4 */
-#define AULA_FX_OFF      ((uint8_t)(FX_COUNT + 1)) /* 5 */
+#define AULA_FX_REACTIVE  ((uint8_t)(FX_COUNT + 0)) /*  4  0x64F1 */
+#define AULA_FX_RAIN      ((uint8_t)(FX_COUNT + 1)) /*  5  0x9B2B */
+#define AULA_FX_TWINKLE   ((uint8_t)(FX_COUNT + 2)) /*  6  0xAC1C -> 0x4EA9 */
+#define AULA_FX_SNAKE     ((uint8_t)(FX_COUNT + 3)) /*  7  0x8DDF */
+#define AULA_FX_SNAKE_RGB ((uint8_t)(FX_COUNT + 4)) /*  8  0x1D05, effet 0x26 */
+#define AULA_FX_RIPPLE    ((uint8_t)(FX_COUNT + 5)) /*  9  0x746A / 0x1D8D */
+#define AULA_FX_KEYWAVE   ((uint8_t)(FX_COUNT + 6)) /* 10  0x82A5 */
+#define AULA_FX_VRAINBOW  ((uint8_t)(FX_COUNT + 7)) /* 11  0x9659 */
+#define AULA_FX_GAMING    ((uint8_t)(FX_COUNT + 8)) /* 12  0x1DAB -> 0x95A4 */
+#define AULA_FX_OFF       ((uint8_t)(FX_COUNT + 9)) /* 13 */
+
+/*
+ * Les six premiers de cette liste (REACTIVE à RIPPLE) partagent la MÊME
+ * mécanique, et c'est celle du firmware d'usine : un plan d'intensité par
+ * touche qui décroît d'une trame à l'autre, et un semeur qui y remet des
+ * touches à fond. L'usine range la couleur de base en XRAM 0x0428, l'intensité
+ * en 0x0017, et son rendu 0x62E6 calcule `base * intensité >> 5` vers 0x0152 --
+ * exactement le modèle à deux plans que ce fichier tient déjà pour le moteur
+ * réactif. Seul le SEMEUR change d'un effet à l'autre :
+ *
+ *   REACTIVE   les touches frappées            (déjà en place)
+ *   RAIN       une gouttelette par colonne, colonnes relancées au hasard
+ *   TWINKLE    des touches tirées au hasard
+ *   SNAKE      un point qui parcourt la grille en serpentin et rebondit
+ *   SNAKE_RGB  le même, teinte tirée au hasard  (mode couleur 7 de l'usine)
+ *   RIPPLE     une couronne par trame depuis (colonne 7, ligne 2)
+ *
+ * Les trois derniers n'ont pas d'état : ce sont des fonctions pures de la
+ * position et de la phase.
+ */
 
 /*
  * État du moteur réactif. Le firmware d'usine y met 378 octets de couleur et
  * 126 d'intensité ; ici une teinte sur la roue suffit, ce qui tient en un octet
  * par touche au lieu de trois.
  */
-#define REACT_DECAY 8 /* points d'intensité perdus par trame */
-static __xdata uint8_t react_hue[LED_COLS][LED_ROWS];
-static __xdata uint8_t react_val[LED_COLS][LED_ROWS];
-static __xdata uint8_t react_prev[LED_COLS];
+#define SPARK_DECAY 8 /* points d'intensité perdus par trame */
+static __xdata uint8_t spark_hue[LED_COLS][LED_ROWS];
+static __xdata uint8_t spark_val[LED_COLS][LED_ROWS];
+static __xdata uint8_t spark_prev[LED_COLS];
 
 /*
  * À purger en même temps que le framebuffer sur un changement d'effet : sinon
  * on revient dans le mode réactif avec des touches qui finissent de s'éteindre
- * depuis la dernière fois, et un bit resté dans `react_prev` avale le premier
+ * depuis la dernière fois, et un bit resté dans `spark_prev` avale le premier
  * appui réel d'une touche qui était enfoncée à la sortie du mode.
  */
-static void react_reset(void)
+static void spark_reset(void)
 {
     uint8_t col;
     uint8_t row;
 
     for (col = 0; col < LED_COLS; col++) {
-        react_prev[col] = 0;
+        spark_prev[col] = 0;
         for (row = 0; row < LED_ROWS; row++) {
-            react_val[col][row] = 0;
+            spark_val[col][row] = 0;
         }
+    }
+}
+
+static uint8_t led_col;   /* colonne affichée par la sous-trame courante */
+static uint8_t led_phase; /* phase de l'animation */
+static uint8_t regen_row; /* curseur de régénération, une cellule par sous-trame */
+static uint8_t regen_col;
+
+/* ------------------------------------------------------- semeurs d'usine */
+
+/*
+ * État des semeurs. Vingt-deux octets en tout : l'usine en dépense bien plus,
+ * mais elle range aussi la couleur de base de chaque touche, ce que le plan de
+ * teintes ci-dessus remplace pour un tiers du prix.
+ */
+static __xdata uint8_t rain_row[LED_COLS]; /* 0-5, ou 0xFF quand la colonne dort */
+static uint8_t         snake_col;
+static uint8_t         snake_row;
+static uint8_t         snake_right; /* sens horizontal courant */
+static uint8_t         snake_down;  /* sens vertical courant */
+static uint8_t         ripple_ring;
+
+/* Allume une touche à fond, si la grille en porte une à cette position. */
+static void spark_seed(uint8_t col, uint8_t row, uint8_t hue)
+{
+    if (col >= LED_COLS || row >= LED_ROWS) {
+        return;
+    }
+    if ((aula_fx_present(col) & (uint8_t)(1u << row)) == 0) {
+        return;
+    }
+    spark_hue[col][row] = hue;
+    spark_val[col][row] = 255;
+}
+
+/*
+ * Pluie -- transcrite de 0x9B2B.
+ *
+ * Une colonne tirée au hasard est relancée si elle dort, puis chaque colonne
+ * active descend d'une ligne et s'éteint après la sixième. L'usine écrit
+ * exactement cette boucle : `si état < 6 : peindre, état++ ; sinon état = 0xFF`,
+ * précédée d'un `si état[hasard] == 0xFF : état[hasard] = 0`.
+ */
+static void rain_step(void)
+{
+    const uint8_t seed = (uint8_t)(aula_fx_rand() % LED_COLS);
+    uint8_t       col;
+
+    if (rain_row[seed] == 0xff) {
+        rain_row[seed] = 0;
+    }
+    for (col = 0; col < LED_COLS; col++) {
+        const uint8_t row = rain_row[col];
+
+        if (row < LED_ROWS) {
+            spark_seed(col, row, (uint8_t)(led_phase + col));
+            rain_row[col] = (uint8_t)(row + 1);
+        } else {
+            rain_row[col] = 0xff;
+        }
+    }
+}
+
+/*
+ * Scintillement -- 0xAC1C, dont le rendu 0x4EA9 tire une position au hasard
+ * dans la table 0x2EED puis l'allume. Deux touches par trame : l'usine boucle
+ * sur un compteur que le relevé ne fixe pas, et deux donne une densité qui
+ * ressemble à ce que montre le clavier en vidéo.
+ */
+static void twinkle_step(void)
+{
+    uint8_t n;
+
+    for (n = 0; n < 2; n++) {
+        const uint8_t r = aula_fx_rand();
+
+        spark_seed((uint8_t)(r % LED_COLS), (uint8_t)((r >> 4) % LED_ROWS), led_phase);
+    }
+}
+
+/*
+ * Serpent -- transcrit de 0x8DDF.
+ *
+ * Le point avance horizontalement ; arrivé au bord il inverse son sens ET
+ * descend (ou monte) d'une ligne ; arrivé en haut ou en bas il inverse aussi
+ * son sens vertical. L'usine tient les quatre variables en XRAM 0x0ECA-0x0ECD.
+ *
+ * `random` distingue SNAKE de SNAKE_RGB : l'effet 0x26 force le mode couleur 7,
+ * qui tire une teinte au hasard à chaque touche (0x1D2B).
+ */
+static void snake_step(uint8_t random_hue)
+{
+    spark_seed(snake_col, snake_row, random_hue ? aula_fx_rand() : led_phase);
+
+    if (snake_right) {
+        if (snake_col + 1u < LED_COLS) {
+            snake_col++;
+            return;
+        }
+        snake_right = 0;
+    } else {
+        if (snake_col != 0) {
+            snake_col--;
+            return;
+        }
+        snake_right = 1;
+    }
+
+    if (snake_down) {
+        if (snake_row + 1u < LED_ROWS) {
+            snake_row++;
+        } else {
+            snake_down = 0;
+        }
+    } else {
+        if (snake_row != 0) {
+            snake_row--;
+        } else {
+            snake_down = 1;
+        }
+    }
+}
+
+/*
+ * Onde concentrique -- couronnes de CODE 0x2959, une par trame, la teinte
+ * avançant de 13 crans par couronne comme le relève la feuille sur 0x746A.
+ *
+ * Les identifiants valent `colonne * 8 + ligne` ; ceux qui désignent une
+ * colonne au-delà de la quinzième viennent d'un modèle plus large et sont
+ * écartés par `spark_seed`.
+ */
+static void ripple_step(void)
+{
+    uint8_t slot;
+
+    for (slot = 0; slot < AULA_FX_RING_SLOTS; slot++) {
+        const uint8_t id = aula_fx_ring(ripple_ring, slot);
+
+        if (id == 0xff) {
+            continue;
+        }
+        spark_seed((uint8_t)(id >> 3), (uint8_t)(id & 7u),
+                   (uint8_t)(led_phase + (uint8_t)(ripple_ring * 13u)));
+    }
+    if (++ripple_ring >= AULA_FX_RINGS) {
+        ripple_ring = 0;
+    }
+}
+
+/*
+ * Appelé UNE FOIS par trame d'animation, au bouclage du curseur de
+ * régénération -- et pas depuis `led_regen_one()`, qui voit chaque colonne six
+ * fois par trame. Y semer ferait courir la pluie et le serpent six fois trop
+ * vite, et rien dans le journal de compilation ne le montrerait.
+ */
+/*
+ * Remise à plat complète sur changement d'effet : le plan d'intensité ET l'état
+ * des semeurs. Sans cela, on rentre dans la pluie avec des colonnes déjà à
+ * mi-course et dans le serpent avec un point posé n'importe où.
+ */
+static void fx_reset(void)
+{
+    uint8_t col;
+
+    spark_reset();
+    for (col = 0; col < LED_COLS; col++) {
+        rain_row[col] = 0xff;
+    }
+    snake_col   = 0;
+    snake_row   = 0;
+    snake_right = 1;
+    snake_down  = 1;
+    ripple_ring = 0;
+}
+
+static void fx_frame_advance(void)
+{
+    switch (user_settings.led_effect) {
+        case AULA_FX_RAIN:      rain_step();     break;
+        case AULA_FX_TWINKLE:   twinkle_step();  break;
+        case AULA_FX_SNAKE:     snake_step(0);   break;
+        case AULA_FX_SNAKE_RGB: snake_step(1);   break;
+        case AULA_FX_RIPPLE:    ripple_step();   break;
+        default:                                 break;
     }
 }
 
 #define LED_BRIGHTNESS_DEFAULT (LED_BRIGHTNESS_LEVELS - 1)
 #define LED_SPEED_DEFAULT      2
 
-static uint8_t led_col;   /* colonne affichée par la sous-trame courante */
-static uint8_t led_phase; /* phase de l'animation */
-static uint8_t regen_row; /* curseur de régénération, une cellule par sous-trame */
-static uint8_t regen_col;
 
 /* ------------------------------------------------------------------ sortie */
 
@@ -210,20 +419,64 @@ static void led_regen_one(void)
     const uint8_t gain = led_brightness_gain[user_settings.led_brightness];
     uint8_t       rgb[3];
 
-    if (user_settings.led_effect == AULA_FX_REACTIVE) {
-        const uint8_t val = react_val[regen_col][regen_row];
+    if (user_settings.led_effect >= AULA_FX_REACTIVE &&
+        user_settings.led_effect <= AULA_FX_RIPPLE) {
+        /* Les six effets à plan d'intensité : le rendu est le même pour tous,
+         * seul le semeur diffère. La décroissance vit ici parce que chaque
+         * cellule est régénérée exactement une fois par trame. */
+        const uint8_t val = spark_val[regen_col][regen_row];
 
         if (val == 0) {
             aula_rgb_set(regen_row, regen_col, 0, 0, 0);
         } else {
             const uint8_t k = led_scale(val, gain);
 
-            aula_rgb_wheel(react_hue[regen_col][regen_row], rgb);
+            aula_rgb_wheel(spark_hue[regen_col][regen_row], rgb);
             aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], k), led_scale(rgb[1], k),
                          led_scale(rgb[2], k));
-            react_val[regen_col][regen_row] =
-                (val > REACT_DECAY) ? (uint8_t)(val - REACT_DECAY) : 0;
+            spark_val[regen_col][regen_row] =
+                (val > SPARK_DECAY) ? (uint8_t)(val - SPARK_DECAY) : 0;
         }
+    } else if (user_settings.led_effect == AULA_FX_VRAINBOW) {
+        /*
+         * Arc-en-ciel vertical défilant -- transcrit de 0x9659 : la teinte
+         * avance de 25 crans PAR LIGNE, modulo 192, et sa base défile d'une
+         * trame à l'autre. Six lignes x 25 couvrent 150 des 192 entrées, donc
+         * un arc-en-ciel presque complet du haut vers le bas du clavier.
+         */
+        const uint8_t hue = (uint8_t)((led_phase + (uint8_t)(regen_row * 25u)) %
+                                      AULA_RGB_WHEEL_SIZE);
+
+        aula_rgb_wheel(hue, rgb);
+        aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
+                     led_scale(rgb[2], gain));
+    } else if (user_settings.led_effect == AULA_FX_KEYWAVE) {
+        /*
+         * Vague sur la palette de 128 -- 0x82A5. Ce qui est TRANSCRIT : la
+         * palette lue, et l'avance de la phase d'un cran par trame et par
+         * touche (0xEDA2, incrément avec repli modulo la taille de la table).
+         *
+         * Ce qui est NOTRE CHOIX : le décalage entre touches. L'usine le prend
+         * dans un plan par touche en XRAM 0x0017, que 0xACA3 recopie transposé
+         * depuis 0x0E49 -- et l'écrivain de 0x0E49 n'a pas été cherché. Avec un
+         * plan uniforme, l'effet d'usine serait un clavier d'une seule couleur
+         * qui défile ; on lui donne ici un décalage diagonal, ce qui en fait une
+         * vraie vague. Si le plan d'usine s'avère uniforme, retirer le terme.
+         */
+        const uint8_t idx = (uint8_t)(led_phase + (uint8_t)(regen_col * 4u) +
+                                      (uint8_t)(regen_row * 8u));
+
+        aula_fx_palette(idx, rgb);
+        aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
+                     led_scale(rgb[2], gain));
+    } else if (user_settings.led_effect == AULA_FX_GAMING) {
+        /*
+         * Image statique de CODE 0xCAFC : Échap, W A S D et le pavé fléché en
+         * bleu. Les plans rouge et vert d'usine sont entièrement nuls.
+         */
+        const uint8_t lit = aula_fx_gaming(regen_col) & (uint8_t)(1u << regen_row);
+
+        aula_rgb_set(regen_row, regen_col, 0, 0, lit ? gain : 0);
     } else if (user_settings.led_effect == (uint8_t)FX_SOLID) {
         aula_rgb_set(regen_row, regen_col, gain, gain, gain); /* blanc */
     } else {
@@ -242,6 +495,7 @@ static void led_regen_one(void)
         if (++regen_row >= LED_ROWS) {
             regen_row = 0;
             led_phase = (uint8_t)(led_phase + led_speeds[user_settings.led_speed]);
+            fx_frame_advance();
         }
     }
 }
@@ -266,17 +520,17 @@ void indicators_pre_update(void)
 static void led_react_poll(void)
 {
     const uint8_t now   = user_matrix_pressed(led_col);
-    const uint8_t fresh = (uint8_t)(now & (uint8_t)~react_prev[led_col]);
+    const uint8_t fresh = (uint8_t)(now & (uint8_t)~spark_prev[led_col]);
 
-    react_prev[led_col] = now;
+    spark_prev[led_col] = now;
 
     if (fresh == 0) {
         return;
     }
     for (uint8_t row = 0; row < LED_ROWS; row++) {
         if (fresh & (uint8_t)(1u << row)) {
-            react_hue[led_col][row] = led_phase;
-            react_val[led_col][row] = 255;
+            spark_hue[led_col][row] = led_phase;
+            spark_val[led_col][row] = 255;
         }
     }
 }
@@ -340,7 +594,7 @@ void indicators_init(void)
     regen_row = 0;
     regen_col = 0;
 
-    react_reset();
+    fx_reset();
     aula_rgb_clear();
 }
 
@@ -357,7 +611,7 @@ void indicators_next_effect(void)
         user_settings.led_effect = 0;
     }
     aula_rgb_clear(); /* l'effet précédent laisserait ses pixels derrière lui */
-    react_reset();
+    fx_reset();
     settings_mark_dirty();
 }
 
@@ -369,7 +623,7 @@ void indicators_prev_effect(void)
         user_settings.led_effect--;
     }
     aula_rgb_clear();
-    react_reset();
+    fx_reset();
     settings_mark_dirty();
 }
 
