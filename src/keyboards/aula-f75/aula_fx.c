@@ -129,53 +129,66 @@ static const __code uint8_t present[AULA_FX_COLS] = {
 };
 
 /*
- * Colonne SPATIALE d'une colonne électrique -- l'inverse de la table A d'usine.
+ * LA CARTE DE TOUCHES D'USINE -- CODE 0xC500, recopiée telle quelle.
  *
- * `CODE 0x2EED` est une grille de six lignes sur vingt-et-une colonnes,
- * indexée `ligne * 21 + colonne`, et le moteur de la vague (`0x82A5`) s'en sert
- * ainsi : sa boucle parcourt la colonne de 0 à 14, calcule l'effet sur cet
- * index, puis écrit le pixel à la colonne `A[ligne][colonne]`. La table mappe
- * donc la colonne de BOUCLE vers la colonne de SORTIE.
+ * Indexée `colonne * 6 + ligne`, elle rend l'identifiant d'usine de la touche,
+ * `colonne * 8 + ligne`, ou `0xFF` quand la grille n'en porte aucune. Elle
+ * remplace ici DEUX tables que ce fichier dérivait séparément -- un masque de
+ * présence et une carte de colonne spatiale -- parce que le dump prouve
+ * qu'elles n'en font qu'une :
  *
- * Ce portage fait l'inverse : il itère sur la colonne de sortie (`regen_col`,
- * la colonne électrique) et doit retrouver l'index de boucle. D'où cette table,
- * qui est l'inverse de la table A, vérifiée dans les deux sens contre le dump.
+ *   - `id == 0xFF` <=> pas de touche. Six positions sur quatre-vingt-dix.
+ *   - `id >> 3`    == la colonne SPATIALE : vérifié égal à l'inverse de la
+ *                     table A (`CODE 0x2EED`) sur les quinze colonnes.
+ *   - `id & 7`     == la ligne elle-même, sur toutes les entrées présentes --
+ *                     le même résultat que la table B (`CODE 0x2F6B`).
  *
- * Cinq lignes sur six sont l'identité. **La ligne 4 permute** : la colonne
- * électrique 12 se trouve spatialement entre les colonnes 0 et 1, et les
- * colonnes 1 à 11 glissent d'un cran. C'est la place de la touche
- * supplémentaire des dispositions ISO, que cette carte réserve même quand la
- * disposition compilée ne la porte pas.
+ * Les quatre-vingt-quatre identifiants présents sont deux à deux distincts :
+ * c'est une bijection sur les touches réelles.
  *
- * La géométrie que `utils/led_geometry_gen` produit pour ce clavier suppose une
- * grille uniforme -- `axis_x[col] = col * 17` -- donc colonne électrique égale
- * colonne spatiale. Sur la ligne 4 c'est faux, et sans cette table le dégradé
- * horizontal et l'onde radiale placent une touche au mauvais endroit.
+ * ⚠️ LA TABLE D'USINE FAIT 126 ENTRÉES, PAS 90. Elle décrit une grille de
+ * VINGT-ET-UNE colonnes -- même largeur que les tables A et B -- et va jusqu'à
+ * l'identifiant `0xA4`, colonne 20. Ce clavier n'en a que quinze ; les six
+ * colonnes suivantes appartiennent à un modèle plus large de la même famille.
+ * C'est ce que teste le `< 15` du moteur de rendu d'usine, un garde qui ne se
+ * déclenche jamais ici. Seules les quinze premières colonnes sont recopiées.
  *
- * La table B d'usine, `CODE 0x2F6B`, n'est PAS transcrite : ses 126 octets sont
- * exactement l'index de ligne, `B[ligne * 21 + colonne] == ligne` pour les 126
- * positions. La recopier serait 126 octets d'identité.
+ * La ligne 4 permute : la colonne électrique 12 y porte l'identifiant `0x0C`,
+ * soit la colonne spatiale 1, et les colonnes 1 à 11 glissent d'un cran. C'est
+ * la place de la touche supplémentaire des dispositions ISO, celle qui suit la
+ * touche Maj gauche.
  */
-static const __code uint8_t render_col[AULA_FX_ROWS][AULA_FX_COLS] = {
-    { 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14},
-    { 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14},
-    { 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14},
-    { 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14},
-    { 0,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12,  1, 13, 14},
-    { 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14},
+static const __code uint8_t key_id[AULA_FX_COLS][AULA_FX_ROWS] = {
+    {0x00, 0x01, 0x02, 0x03, 0x04, 0x05}, /* colonne  0 */
+    {0xff, 0x09, 0x0a, 0x0b, 0x14, 0x0d}, /* colonne  1 */
+    {0x10, 0x11, 0x12, 0x13, 0x1c, 0x15}, /* colonne  2 */
+    {0x18, 0x19, 0x1a, 0x1b, 0x24, 0xff}, /* colonne  3 */
+    {0x20, 0x21, 0x22, 0x23, 0x2c, 0xff}, /* colonne  4 */
+    {0x28, 0x29, 0x2a, 0x2b, 0x34, 0x2d}, /* colonne  5 */
+    {0x30, 0x31, 0x32, 0x33, 0x3c, 0xff}, /* colonne  6 */
+    {0x38, 0x39, 0x3a, 0x3b, 0x44, 0xff}, /* colonne  7 */
+    {0x40, 0x41, 0x42, 0x43, 0x4c, 0x45}, /* colonne  8 */
+    {0x48, 0x49, 0x4a, 0x4b, 0x54, 0x4d}, /* colonne  9 */
+    {0x50, 0x51, 0x52, 0x53, 0x5c, 0x55}, /* colonne 10 */
+    {0x58, 0x59, 0x5a, 0x5b, 0x64, 0xff}, /* colonne 11 */
+    {0x60, 0x61, 0x62, 0x63, 0x0c, 0x65}, /* colonne 12 */
+    {0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d}, /* colonne 13 */
+    {0x70, 0x71, 0x72, 0x73, 0x74, 0x75}, /* colonne 14 */
 };
+
+uint8_t aula_fx_key_id(uint8_t col, uint8_t row)
+{
+    if (col >= AULA_FX_COLS || row >= AULA_FX_ROWS) {
+        return AULA_FX_NO_KEY;
+    }
+    return key_id[col][row];
+}
 
 uint8_t aula_fx_render_col(uint8_t col, uint8_t row)
 {
-    if (col >= AULA_FX_COLS || row >= AULA_FX_ROWS) {
-        return col;
-    }
-    return render_col[row][col];
-}
+    const uint8_t id = aula_fx_key_id(col, row);
 
-uint8_t aula_fx_present(uint8_t col)
-{
-    return (col < AULA_FX_COLS) ? present[col] : 0;
+    return (id == AULA_FX_NO_KEY) ? col : (uint8_t)(id >> 3);
 }
 
 /*

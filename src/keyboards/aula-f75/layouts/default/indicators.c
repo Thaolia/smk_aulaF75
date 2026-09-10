@@ -193,7 +193,7 @@ static void spark_seed(uint8_t col, uint8_t row, uint8_t hue)
     if (col >= LED_COLS || row >= LED_ROWS) {
         return;
     }
-    if ((aula_fx_present(col) & (uint8_t)(1u << row)) == 0) {
+    if (aula_fx_key_id(col, row) == AULA_FX_NO_KEY) {
         return;
     }
     spark_hue[col][row] = hue;
@@ -588,7 +588,7 @@ static void led_regen_one(void)
      * continus -- vague, arc-en-ciel vertical, uni, géométrie de SMK -- ne le
      * faisaient pas et payaient une recherche de couleur pour rien.
      */
-    if ((aula_fx_present(regen_col) & (uint8_t)(1u << regen_row)) == 0) {
+    if (aula_fx_key_id(regen_col, regen_row) == AULA_FX_NO_KEY) {
         aula_rgb_set(regen_row, regen_col, 0, 0, 0);
     } else if (user_settings.led_effect >= AULA_FX_REACTIVE &&
         user_settings.led_effect <= AULA_FX_RIPPLE) {

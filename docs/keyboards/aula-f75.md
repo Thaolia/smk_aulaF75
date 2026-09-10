@@ -1587,6 +1587,51 @@ mauvais endroit.
 dont on a vérifié qu'ils valent l'index de ligne serait de la donnée morte. La ligne passe telle
 quelle.
 
+##### Résolu : `0xC500` EST l'inverse de la table A
+
+La réserve notée plus haut — « deux tables d'usine, deux espaces » — tombe. `CODE 0xC500` n'a pas
+90 entrées mais **126**, et sa borne se lit dans le code : la file de touches en `XRAM 0x039F` ne
+retient une entrée que si elle est **inférieure à 126** (`0x1670`), avant de la ranger dans
+`[0x0EE0]` et de poser `[0x0EE1] = 0`. Le portage n'en avait recopié que les 90 premières.
+
+Relue sur ses 126 entrées, indexée `colonne × 6 + ligne`, la table décrit **vingt-et-une colonnes** —
+la même largeur que les tables A et B — et va jusqu'à l'identifiant `0xA4`, colonne 20 :
+
+```
+c 0: 00 01 02 03 04 05        c14: 70 71 72 73 74 75
+c 1: .. 09 0a 0b 14 0d        c15: 78 79 7a 7b 7c 7d   <<< au-dela de ce clavier
+c 2: 10 11 12 13 1c 15        c16: 80 81 82 83 84 85
+...                           c20: .. a1 a2 .. a4 ..
+```
+
+**Ce clavier n'a que quinze colonnes** ; les six suivantes appartiennent à un modèle plus large de la
+même famille. C'est exactement ce que teste le `< 15` du moteur de rendu — un garde qui, la boucle
+s'arrêtant à 14, ne se déclenche jamais ici.
+
+Et sur les quinze colonnes utiles, la vérification est sans appel :
+
+| Vérification | Résultat |
+| --- | --- |
+| `id >> 3` contre l'inverse de la table A | **identique** sur les 90 positions |
+| `id & 7` contre la ligne elle-même | **identique** — le même résultat que la table B |
+| identifiants présents | **84, tous distincts** : une bijection sur les touches réelles |
+| masque de présence par index vs par identifiant | **identique** — la permutation ne déplace jamais une absence |
+
+`0xC500` et `0x2EED` ne sont donc pas deux cartes rivales, ce sont **une carte et son inverse** :
+`0xC500` va de la colonne électrique vers la colonne spatiale, `0x2EED` fait le chemin retour.
+
+##### Conséquence sur le portage : deux tables dérivées deviennent une transcription
+
+`aula_fx.c` portait deux tables **dérivées** — un masque de présence de 15 octets et une carte de
+colonne spatiale de 90 octets, obtenue en inversant la table A. Les deux sont remplacées par les
+**90 octets de `CODE 0xC500` recopiés tels quels**, dont elles se déduisent :
+
+- présence : `aula_fx_key_id(col, row) == 0xFF` ;
+- colonne spatiale : `aula_fx_key_id(col, row) >> 3`.
+
+Moins de données, aucune dérivation, et la comparaison octet par octet avec le dump passe. Le test de
+présence y gagne au passage : un accès direct au lieu d'un masque de colonne suivi d'un décalage.
+
 ##### Ce que le moteur de la vague fait autour de la palette
 
 `0x82A5` ne peint pas la grille entière. Pour chaque position il lit la **table A** (`CODE 0x2EED`,
