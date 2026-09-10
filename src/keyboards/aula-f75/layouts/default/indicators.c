@@ -476,19 +476,20 @@ static void led_regen_one(void)
                      led_scale(rgb[2], gain));
     } else if (user_settings.led_effect == AULA_FX_KEYWAVE) {
         /*
-         * Vague sur la palette de 128 -- 0x82A5. Ce qui est TRANSCRIT : la
-         * palette lue, et l'avance de la phase d'un cran par trame et par
-         * touche (0xEDA2, incrément avec repli modulo la taille de la table).
+         * Vague sur la palette de 128 -- 0x82A5, désormais entièrement
+         * transcrite : la palette, l'avance d'un cran par trame et par touche
+         * (0xEDA2), ET le champ de phase par touche.
          *
-         * Ce qui est NOTRE CHOIX : le décalage entre touches. L'usine le prend
-         * dans un plan par touche en XRAM 0x0017, que 0xACA3 recopie transposé
-         * depuis 0x0E49 -- et l'écrivain de 0x0E49 n'a pas été cherché. Avec un
-         * plan uniforme, l'effet d'usine serait un clavier d'une seule couleur
-         * qui défile ; on lui donne ici un décalage diagonal, ce qui en fait une
-         * vraie vague. Si le plan d'usine s'avère uniforme, retirer le terme.
+         * Ce dernier était donné ici comme notre invention faute d'en trouver
+         * l'écrivain. Il n'y en a pas : c'est un tableau CONSTANT que
+         * l'initialiseur C dépose en XDATA 0x0E49 et que 0xACA3 transpose dans
+         * le plan 0x0017. `aula_fx_keywave()` le porte tel quel.
+         *
+         * Chaque touche part de sa phase et avance d'un cran par trame, ce qui
+         * revient exactement à `phase_de_la_touche + compteur de trames`. Aucun
+         * état à tenir : la fonction est pure.
          */
-        const uint8_t idx = (uint8_t)(led_phase + (uint8_t)(regen_col * 4u) +
-                                      (uint8_t)(regen_row * 8u));
+        const uint8_t idx = (uint8_t)(aula_fx_keywave(regen_col, regen_row) + led_phase);
 
         aula_fx_palette(idx, rgb);
         aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),

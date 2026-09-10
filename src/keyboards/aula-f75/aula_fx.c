@@ -121,6 +121,44 @@ uint8_t aula_fx_gaming(uint8_t col)
 }
 
 /*
+ * Champ de phase par touche de l'effet 15 -- les 90 colonnes utiles des 126
+ * octets que l'initialiseur C dépose en XDATA 0x0E49 (données en CODE 0x9FEA).
+ *
+ * La lecture de la table Keil est auto-validante : ses trois enregistrements
+ * font 1, 1 et 126 octets, et le terminateur 0x00 tombe exactement à la fin du
+ * troisième, en 0xA068. Aucune place pour un décalage.
+ *
+ * Rangé ici en [colonne][ligne] -- l'usine le range en [ligne][colonne] avec un
+ * pas de 21, et 0xACA3 le transpose au chargement. On transpose une fois pour
+ * toutes, à la compilation.
+ */
+static const __code uint8_t keywave[AULA_FX_COLS][AULA_FX_ROWS] = {
+    {0x52, 0x50, 0x4d, 0x48, 0x45, 0x44}, /* colonne  0 */
+    {0x53, 0x50, 0x4e, 0x47, 0x44, 0x42}, /* colonne  1 */
+    {0x54, 0x51, 0x4e, 0x46, 0x43, 0x40}, /* colonne  2 */
+    {0x55, 0x52, 0x4f, 0x45, 0x42, 0x3e}, /* colonne  3 */
+    {0x57, 0x53, 0x4f, 0x44, 0x40, 0x36}, /* colonne  4 */
+    {0x59, 0x55, 0x50, 0x43, 0x3d, 0x30}, /* colonne  5 */
+    {0x5c, 0x56, 0x52, 0x42, 0x34, 0x29}, /* colonne  6 */
+    {0x62, 0x5f, 0x5a, 0x34, 0x27, 0x1f}, /* colonne  7 */
+    {0x69, 0x6c, 0x7d, 0x17, 0x1b, 0x19}, /* colonne  8 */
+    {0x73, 0x78, 0x06, 0x11, 0x18, 0x17}, /* colonne  9 */
+    {0x78, 0x7f, 0x08, 0x10, 0x16, 0x16}, /* colonne 10 */
+    {0x7c, 0x01, 0x09, 0x0f, 0x13, 0x15}, /* colonne 11 */
+    {0x7f, 0x03, 0x09, 0x0f, 0x13, 0x14}, /* colonne 12 */
+    {0x01, 0x06, 0x0a, 0x0f, 0x12, 0x14}, /* colonne 13 */
+    {0x03, 0x07, 0x0b, 0x0e, 0x12, 0x13}, /* colonne 14 */
+};
+
+uint8_t aula_fx_keywave(uint8_t col, uint8_t row)
+{
+    if (col >= AULA_FX_COLS || row >= AULA_FX_ROWS) {
+        return 0;
+    }
+    return keywave[col][row];
+}
+
+/*
  * Générateur pseudo-aléatoire.
  *
  * COMPORTEMENT transcrit, GÉNÉRATEUR substitué, et c'est délibéré. L'usine

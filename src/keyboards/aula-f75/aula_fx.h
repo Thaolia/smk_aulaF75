@@ -44,5 +44,22 @@ uint8_t aula_fx_present(uint8_t col);
  * fléché. Même encodage en masque de lignes. */
 uint8_t aula_fx_gaming(uint8_t col);
 
+/*
+ * Champ de phase par touche de l'effet 15, CODE 0x9FEA.
+ *
+ * Ce n'est pas du code qui l'écrit, c'est l'INITIALISEUR C : la table de
+ * décompression Keil en CODE 0x9FDE ne compte que trois enregistrements, et le
+ * troisième copie 126 octets vers XDATA 0x0E49 au démarrage. `fcn @ 0xACA3` les
+ * y recopie ensuite transposés (pas de 21 -> pas de 6) dans le plan de phase
+ * 0x0017. Voilà pourquoi aucune instruction de l'image ne référence 0x0E49 en
+ * écriture : c'est une constante, pas une variable.
+ *
+ * Les valeurs vont de 1 à 127 -- très exactement la plage d'un index dans la
+ * palette de 128 -- et dessinent un balayage angulaire : la phase croît le long
+ * de la première ligne jusqu'à repasser par zéro entre les colonnes 12 et 13,
+ * et décroît vers le bas à gauche. Une vague qui tourne, pas qui translate.
+ */
+uint8_t aula_fx_keywave(uint8_t col, uint8_t row);
+
 /* Tirage pseudo-aléatoire, 0-255. */
 uint8_t aula_fx_rand(void);

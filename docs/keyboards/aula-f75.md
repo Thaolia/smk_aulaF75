@@ -704,13 +704,57 @@ suivre la décroissance du plan d'intensité, `4 << vitesse` (4, 8, 16, 32, 64).
 constant : la **traînée garde la même longueur** — environ quatre touches — à toutes les vitesses,
 et seul le mouvement accélère.
 
-##### Ce qui reste ouvert sur ces moteurs
+##### Le champ de phase de l'effet 15 — l'écrivain de `0x0E49` n'existe pas
 
-Le **décalage entre touches de l'effet 15**. La palette et l'avance d'un cran par trame sont
-transcrites. Le plan de phase d'usine vit en `XRAM 0x0017` et `fcn @ 0xACA3` l'y recopie **transposé**
-depuis `XRAM 0x0E49` (stride 21 → stride 6) — mais l'écrivain de `0x0E49` n'a pas été cherché. Avec
-un plan uniforme, l'effet d'usine serait un clavier d'une seule couleur qui défile ; le portage lui
-donne un décalage diagonal et le signale sur place.
+Cette page a listé « l'écrivain de `XRAM 0x0E49` » comme point ouvert. **Il n'y en a pas, et c'est la
+réponse** : le plan est une *constante*, pas une variable.
+
+La recherche a d'abord donné un résultat qui ressemblait à une impasse : sur les 126 octets de
+`0x0E49`–`0x0EC6`, **une seule référence dans les 64 Ko de l'image**, et c'est la lecture par le
+transposeur `0xACAC`. Trois formes d'adressage pouvaient encore cacher une écriture ; les trois sont
+éliminées :
+
+| Forme | Verdict |
+| --- | --- |
+| `MOV DPTR,#0x0E49` | aucun site — la plage `0x0E4A`–`0x0EC7` n'est référencée nulle part |
+| `ADD A,#0x49` / `ADDC A,#0x0E` | un seul site, `0xACAC`, et c'est une lecture |
+| `MOVX @Ri` (page `P2`) | impossible : `P2` n'est écrit que deux fois, dont une dans le bootloader, et l'autre (`0xA824`) est une mise à zéro de port au démarrage. `P2` vaut 0, donc `MOVX @Ri` ne voit que `0x00xx` |
+
+Le démarrage donne la réponse. `startup_c51` (`0x9C74`) efface **les 4 096 octets de XDATA**
+(`0x9C7A`–`0x9C86`) puis saute au décompacteur d'initialiseurs Keil, qui lit la table de `CODE 0x9FDE`.
+Cette table ne compte que **trois enregistrements** :
+
+| Enregistrement | Contrôle | Taille | Destination |
+| --- | --- | --- | --- |
+| `0x9FDE` | `0x41` | 1 o | `XDATA 0x08C4` |
+| `0x9FE2` | `0x41` | 1 o | `XDATA 0x0C36` |
+| `0x9FE6` | `0x60` | **126 o** | **`XDATA 0x0E49`**, données en `CODE 0x9FEA` |
+
+Le décodage est **auto-validant** : le terminateur `0x00` tombe exactement à la fin du troisième
+enregistrement, en `0xA068`. Aucune place pour un décalage d'interprétation.
+
+Les 126 octets, remis en forme `[ligne][colonne]` avec le pas de 21 qu'emploie `0xACA3` :
+
+```
+l0: 52 53 54 55 57 59 5c 62 69 73 78 7c 7f 01 03 | 05 06 07 08 51 51
+l1: 50 50 51 52 53 55 56 5f 6c 78 7f 01 03 06 07 | 08 09 09 0a 4f 4f
+l2: 4d 4e 4e 4f 4f 50 52 5a 7d 06 08 09 09 0a 0b | 0b 0b 0c 0c 4d 4d
+l3: 48 47 46 45 44 43 42 34 17 11 10 0f 0f 0f 0e | 0e 0e 0d 0d 4a 49
+l4: 45 44 43 42 40 3d 34 27 1b 18 16 13 13 12 12 | 12 11 10 0f 47 46
+l5: 44 42 40 3e 36 30 29 1f 19 17 16 15 14 14 13 | 12 11 11 10 46 45
+```
+
+Valeurs **1 à 127** — très exactement la plage d'un index dans la palette de 128, ce qui confirme la
+lecture du moteur. Et le champ n'est **pas uniforme** : c'est un **balayage angulaire**. La phase
+croît le long de la première ligne jusqu'à repasser par zéro entre les colonnes 12 et 13, et décroît
+vers le bas à gauche. Une vague qui **tourne**, pas qui translate.
+
+Le portage transpose la table une fois pour toutes à la compilation (`aula_fx_keywave()`, 90 octets
+pour les colonnes utiles) et calcule `phase_de_la_touche + compteur de trames` — strictement
+équivalent à l'avance d'un cran par trame et par touche que fait `0xEDA2`, sans aucun état à tenir.
+
+**L'effet 15 est donc entièrement transcrit.** L'approximation diagonale que le portage assumait est
+retirée.
 
 Hors table, les deux effets spéciaux :
 
