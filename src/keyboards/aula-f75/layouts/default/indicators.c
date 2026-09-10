@@ -115,7 +115,14 @@ static const __code uint8_t led_speeds[] = {1, 2, 4, 8, 16};
  * 126 d'intensité ; ici une teinte sur la roue suffit, ce qui tient en un octet
  * par touche au lieu de trois.
  */
-#define SPARK_DECAY 8 /* points d'intensité perdus par trame */
+/*
+ * Décroissance du plan d'intensité, en points par trame. Elle suit la vitesse,
+ * comme le diviseur de trame des semeurs : `4 << vitesse` donne 4, 8, 16, 32,
+ * 64 pendant que le diviseur donne 16, 8, 4, 2, 1. Le produit reste constant,
+ * donc la TRAÎNÉE garde la même longueur -- environ quatre touches -- à toutes
+ * les vitesses, et seul le mouvement accélère.
+ */
+#define SPARK_DECAY (uint8_t)(4u << user_settings.led_speed)
 static __xdata uint8_t spark_hue[LED_COLS][LED_ROWS];
 static __xdata uint8_t spark_val[LED_COLS][LED_ROWS];
 static __xdata uint8_t spark_prev[LED_COLS];
@@ -157,6 +164,7 @@ static uint8_t         snake_row;
 static uint8_t         snake_right; /* sens horizontal courant */
 static uint8_t         snake_down;  /* sens vertical courant */
 static uint8_t         ripple_ring;
+static uint8_t         fx_frame_div; /* compteur du diviseur de trame */
 
 /* Allume une touche à fond, si la grille en porte une à cette position. */
 static void spark_seed(uint8_t col, uint8_t row, uint8_t hue)
@@ -306,13 +314,28 @@ static void fx_reset(void)
     }
     snake_col   = 0;
     snake_row   = 0;
-    snake_right = 1;
-    snake_down  = 1;
-    ripple_ring = 0;
+    snake_right  = 1;
+    snake_down   = 1;
+    ripple_ring  = 0;
+    fx_frame_div = 0;
 }
 
 static void fx_frame_advance(void)
 {
+    /*
+     * LA VITESSE PILOTE AUSSI LE MOUVEMENT, pas seulement la teinte.
+     *
+     * `led_speeds[]` ne fait avancer que `led_phase` : sans ce diviseur,
+     * SPD_UP/SPD_DN changeraient la couleur de la pluie et du serpent mais pas
+     * leur allure -- la gouttelette tomberait d'une ligne par trame quel que
+     * soit le réglage. Le firmware d'usine, lui, conditionne tout son rendu à
+     * `tic >= période`, période tirée de `CODE 0x2FE9` selon la vitesse.
+     */
+    if (++fx_frame_div < (uint8_t)(16u >> user_settings.led_speed)) {
+        return;
+    }
+    fx_frame_div = 0;
+
     switch (user_settings.led_effect) {
         case AULA_FX_RAIN:      rain_step();     break;
         case AULA_FX_TWINKLE:   twinkle_step();  break;
@@ -434,8 +457,9 @@ static void led_regen_one(void)
             aula_rgb_wheel(spark_hue[regen_col][regen_row], rgb);
             aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], k), led_scale(rgb[1], k),
                          led_scale(rgb[2], k));
-            spark_val[regen_col][regen_row] =
-                (val > SPARK_DECAY) ? (uint8_t)(val - SPARK_DECAY) : 0;
+            const uint8_t decay = SPARK_DECAY;
+
+            spark_val[regen_col][regen_row] = (val > decay) ? (uint8_t)(val - decay) : 0;
         }
     } else if (user_settings.led_effect == AULA_FX_VRAINBOW) {
         /*

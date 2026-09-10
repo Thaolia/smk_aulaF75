@@ -692,6 +692,18 @@ Le portage transcrit le **comportement** et substitue le **générateur** : repr
 rendrait pas la même suite sans la même graine ni le même ordre d'appel, et coûterait de la pile
 dans l'ISR pour une propriété observable qui est « une colonne au hasard ».
 
+##### La vitesse pilote le mouvement, pas seulement la teinte
+
+Piège du portage, pas du dump. `led_speeds[]` de SMK ne fait avancer que la phase d'animation, donc
+sans précaution `SPD_UP`/`SPD_DN` changeraient la *couleur* de la pluie et du serpent mais pas leur
+*allure*. Le firmware d'usine, lui, conditionne tout son rendu à `tic ≥ période`, période tirée de
+`CODE 0x2FE9` selon la vitesse.
+
+Le portage gate donc le semeur sur un diviseur de trame `16 >> vitesse` (16, 8, 4, 2, 1) et fait
+suivre la décroissance du plan d'intensité, `4 << vitesse` (4, 8, 16, 32, 64). Le produit reste
+constant : la **traînée garde la même longueur** — environ quatre touches — à toutes les vitesses,
+et seul le mouvement accélère.
+
 ##### Ce qui reste ouvert sur ces moteurs
 
 Le **décalage entre touches de l'effet 15**. La palette et l'avance d'un cran par trame sont
