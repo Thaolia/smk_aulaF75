@@ -48,6 +48,12 @@ uint8_t aula_fx_ring(uint8_t ring, uint8_t slot);
 
 /* Carte de présence, CODE 0xC500 : les six emplacements de la grille 6x15 qui
  * n'ont pas de touche. Un bit par ligne, un octet par colonne. */
+/*
+ * Colonne spatiale d'une colonne électrique : l'inverse de la table A d'usine
+ * (`CODE 0x2EED`). Identité partout sauf sur la ligne 4, qui permute.
+ */
+uint8_t aula_fx_render_col(uint8_t col, uint8_t row);
+
 uint8_t aula_fx_present(uint8_t col);
 
 /* Image « gaming », plan bleu de CODE 0xCAFC : Échap, W A S D et le pavé

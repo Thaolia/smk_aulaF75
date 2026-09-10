@@ -1527,6 +1527,66 @@ Et les trois octets qui séparent les deux roues, `CODE 0x2D6A` = `ff ff ff`, ne
 personne : `0x2B2A + 192 × 3 = 0x2D6A`, `0x2D6A + 3 = 0x2D6D`. Un blanc isolé entre les deux tables,
 qu'aucun index modulo 192 ne peut atteindre.
 
+##### Les tables `0x2EED` et `0x2F6B` — la carte spatiale
+
+Les deux tables font six lignes de vingt-et-une colonnes, indexées `ligne × 21 + colonne`, et le
+moteur de la vague les lit ainsi : sa boucle parcourt la colonne de 0 à 14, calcule l'effet sur cet
+index, puis **écrit le pixel à la colonne `A[ligne][colonne]` et à la ligne `B[ligne][colonne]`**.
+Elles mappent donc la position de BOUCLE vers la position de SORTIE.
+
+Extraites du dump, elles sont d'une simplicité inattendue :
+
+```
+table A, CODE 0x2EED
+  l0 :  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20
+  l1 :  idem
+  l2 :  idem
+  l3 :  idem
+  l4 :  0 12  1  2  3  4  5  6  7  8  9 10 11 13 14 15 16 17 18 19 20   <<<
+  l5 :  idem
+
+table B, CODE 0x2F6B
+  l0 : vingt-et-un zéros ... l5 : vingt-et-un cinq
+```
+
+- **`B` est exactement l'index de ligne** : `B[ligne × 21 + colonne] == ligne` sur les 126
+  positions, vérifié. Elle ne transforme rien.
+- **`A` est l'identité sur cinq lignes**, et **la ligne 4 permute** : la position de boucle 1 sort
+  sur la colonne **12**, et les positions 2 à 12 sortent sur les colonnes 1 à 11.
+- **Exactement 90 des 126 entrées de `A` sont inférieures à 15** — les six lignes de quinze
+  colonnes de la matrice. Les six colonnes de 15 à 20 sont du remplissage, et le test `< 15` du
+  moteur est là pour elles ; la boucle s'arrêtant à 14, il ne se déclenche jamais dans ce firmware.
+
+La colonne 12 de la ligne 4, placée spatialement entre les colonnes 0 et 1, est **la place de la
+touche supplémentaire des dispositions ISO** — celle qui suit la touche Maj gauche. La carte la
+réserve même quand la disposition compilée ne la porte pas.
+
+> **Deux tables d'usine, deux espaces différents.** `CODE 0xC500` porte aussi une permutation sur sa
+> ligne 4, et ce n'est pas la même. Ce n'est pas une contradiction : `0xC500` convertit un **index de
+> balayage** en identifiant de touche pour les arms d'appui, tandis que `0x2EED` convertit une
+> **position de boucle de rendu** en colonne de sortie. Deux conversions, deux usages, aucune raison
+> qu'elles coïncident.
+
+##### Ce que le portage en fait
+
+La géométrie que `utils/led_geometry_gen` produit pour ce clavier suppose une grille **uniforme** :
+
+```c
+static const __code uint8_t axis_x[15] = {0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238};
+```
+
+— c'est-à-dire colonne électrique = colonne spatiale. La table A dit que c'est faux sur la ligne 4.
+
+Le portage itérant sur la colonne de **sortie**, il lui faut l'**inverse** de la table A. Il est
+transcrit dans `aula_fx_render_col()`, construit mécaniquement et vérifié dans les deux sens contre
+le dump, et il alimente désormais `led_effect_index()` pour les trois effets géométriques de SMK —
+radiale, dégradé horizontal, dégradé vertical. Sans lui, une touche de la ligne 4 était peinte au
+mauvais endroit.
+
+**La table B n'est pas transcrite**, et c'est un résultat, pas un raccourci : recopier 126 octets
+dont on a vérifié qu'ils valent l'index de ligne serait de la donnée morte. La ligne passe telle
+quelle.
+
 ##### Ce que le moteur de la vague fait autour de la palette
 
 `0x82A5` ne peint pas la grille entière. Pour chaque position il lit la **table A** (`CODE 0x2EED`,

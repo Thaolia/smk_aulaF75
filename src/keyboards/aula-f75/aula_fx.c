@@ -128,6 +128,51 @@ static const __code uint8_t present[AULA_FX_COLS] = {
     0x3f, 0x3e, 0x3f, 0x1f, 0x1f, 0x3f, 0x1f, 0x1f, 0x3f, 0x3f, 0x3f, 0x1f, 0x3f, 0x3f, 0x3f,
 };
 
+/*
+ * Colonne SPATIALE d'une colonne électrique -- l'inverse de la table A d'usine.
+ *
+ * `CODE 0x2EED` est une grille de six lignes sur vingt-et-une colonnes,
+ * indexée `ligne * 21 + colonne`, et le moteur de la vague (`0x82A5`) s'en sert
+ * ainsi : sa boucle parcourt la colonne de 0 à 14, calcule l'effet sur cet
+ * index, puis écrit le pixel à la colonne `A[ligne][colonne]`. La table mappe
+ * donc la colonne de BOUCLE vers la colonne de SORTIE.
+ *
+ * Ce portage fait l'inverse : il itère sur la colonne de sortie (`regen_col`,
+ * la colonne électrique) et doit retrouver l'index de boucle. D'où cette table,
+ * qui est l'inverse de la table A, vérifiée dans les deux sens contre le dump.
+ *
+ * Cinq lignes sur six sont l'identité. **La ligne 4 permute** : la colonne
+ * électrique 12 se trouve spatialement entre les colonnes 0 et 1, et les
+ * colonnes 1 à 11 glissent d'un cran. C'est la place de la touche
+ * supplémentaire des dispositions ISO, que cette carte réserve même quand la
+ * disposition compilée ne la porte pas.
+ *
+ * La géométrie que `utils/led_geometry_gen` produit pour ce clavier suppose une
+ * grille uniforme -- `axis_x[col] = col * 17` -- donc colonne électrique égale
+ * colonne spatiale. Sur la ligne 4 c'est faux, et sans cette table le dégradé
+ * horizontal et l'onde radiale placent une touche au mauvais endroit.
+ *
+ * La table B d'usine, `CODE 0x2F6B`, n'est PAS transcrite : ses 126 octets sont
+ * exactement l'index de ligne, `B[ligne * 21 + colonne] == ligne` pour les 126
+ * positions. La recopier serait 126 octets d'identité.
+ */
+static const __code uint8_t render_col[AULA_FX_ROWS][AULA_FX_COLS] = {
+    { 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14},
+    { 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14},
+    { 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14},
+    { 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14},
+    { 0,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12,  1, 13, 14},
+    { 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14},
+};
+
+uint8_t aula_fx_render_col(uint8_t col, uint8_t row)
+{
+    if (col >= AULA_FX_COLS || row >= AULA_FX_ROWS) {
+        return col;
+    }
+    return render_col[row][col];
+}
+
 uint8_t aula_fx_present(uint8_t col)
 {
     return (col < AULA_FX_COLS) ? present[col] : 0;

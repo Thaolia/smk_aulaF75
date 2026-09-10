@@ -668,10 +668,24 @@ static void led_regen_one(void)
         aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
                      led_scale(rgb[2], gain));
     } else {
-        /* Géométrie de SMK, couleurs d'usine : l'index sur 0-255 est ramené aux
-         * 192 entrées de la roue. */
+        /*
+         * Géométrie de SMK, couleurs d'usine : l'index sur 0-255 est ramené aux
+         * 192 entrées de la roue.
+         *
+         * La colonne passée n'est PAS la colonne électrique mais la colonne
+         * SPATIALE, tirée de la table A d'usine (`CODE 0x2EED`). La géométrie
+         * générée suppose une grille uniforme -- `axis_x[col] = col * 17` -- et
+         * cette hypothèse est fausse sur la ligne 4, où la colonne électrique 12
+         * se trouve entre les colonnes 0 et 1. Sans cette conversion, le
+         * dégradé horizontal et l'onde radiale placent cette touche-là au
+         * mauvais endroit.
+         *
+         * La LIGNE, elle, n'a besoin d'aucune conversion : la table B d'usine
+         * (`CODE 0x2F6B`) est exactement l'index de ligne sur ses 126 positions.
+         */
         const uint8_t idx =
-            led_effect_index((led_effect_t)user_settings.led_effect, regen_row, regen_col, led_phase);
+            led_effect_index((led_effect_t)user_settings.led_effect, regen_row,
+                             aula_fx_render_col(regen_col, regen_row), led_phase);
 
         fx_color((uint8_t)(((uint16_t)idx * AULA_RGB_WHEEL_SIZE) >> 8), rgb);
         aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
