@@ -3570,6 +3570,88 @@ réinitialisation qui remplit une zone de `0xFF`, écrit `[0x0C44] = 2` et effac
 `0x2C.3` est donc **un drapeau mort** : posé à la réception d'une trame `0x03`, effacé par la
 routine de réinitialisation `fcn.0000929E`, et jamais consulté — ni par bit, ni par octet.
 
+### Les deux derniers points : l'opcode `0x4A` et le bit `b1[7]`
+
+#### `0x4A` est une requête de statut, pas une fin de transfert
+
+Cette page supposait « probablement une fin de transfert », parce que l'opcode arme un seul bloc de
+deux octets dont la charge est remise à zéro. Le handler 7 (`0x3CD0`) dit autre chose :
+
+```c
+[0x0D9E] = 0;                                  /* desarme d'entree : une seule passe */
+IDATA[0x35] = 0x13;                            /* sous-code de reponse */
+IDATA[0x36] = 0x4A;                            /* echo de l'opcode */
+IDATA[0x37] = [0x02E2];                        /* nombre de blocs */
+IDATA[0x38] = [0x0D14];                        /* numero de sequence */
+IDATA[0x39] = ([0x038D] << 4) | [0x038F];      /* sous-index et longueur */
+memset(&IDATA[0x3A], 0, 15);                   /* <<< la « charge remplie de zeros » */
+IDATA[0x3A] = [0x0C36];
+IDATA[0x3B] = 0;
+if (!bit 0x2D.3) IDATA[0x3B]  = 0x01;
+if ( bit 0x26.0) IDATA[0x3B] |= 0x10;
+... somme sur IDATA[0x35..0x48], puis euart0_send
+```
+
+Le `memset` de quinze octets suivi du remplissage de **deux** explique entièrement l'observation qui
+avait mené à l'hypothèse. Et le désarmement immédiat de `[0x0D9E]` confirme qu'il n'y a jamais de
+second bloc : ce n'est pas un transfert, c'est une réponse.
+
+**Le recoupement est net** : la commande USB `0x87` (`0x58DB`, table `0x5817`) construit **les deux
+mêmes octets**, aux mêmes conditions, dans `[0x0095]`/`[0x0096]`, et pose une longueur de `0x0002`.
+`0x4A` est le pendant radio d'une lecture de statut déjà présente côté USB — cohérent avec le reste :
+chaque opération existe sur les deux transports.
+
+Ce que portent les deux octets :
+
+| Octet | Contenu |
+| --- | --- |
+| 1 | `[0x0C36]` — le **pourcentage de batterie**. Établi : `0x8162` y recopie `IDATA[0x17]` juste après que `0x815D` l'ait émis au module par la **commande `0x0D`**, dont cette page a déjà identifié le rôle |
+| 2 | deux drapeaux — bit 0 quand `0x2D.3` est bas, bit 4 quand `0x26.0` est haut |
+
+Les deux bits sont posés et effacés au même endroit, `0x9723`–`0x97AA`, un anti-rebond à deux seuils
+(20 et 200 passages) sur `P7.6` et `P7.7`, et `0x30` pilote directement `P7.6`. *Inféré :* qu'il
+s'agisse de « en charge » et « charge terminée ». Ce qui est établi, c'est leur origine et leur
+place dans la trame.
+
+Et la nuance apportée plus haut tombe d'elle-même : la fin de transfert existe bel et bien, mais
+c'est le **handler 10**, pas l'opcode `0x4A`.
+
+#### `b1[7]` n'a pas de lecteur, et le négatif est borné
+
+Le bit 7 de `b1`, l'octet de paramètre par effet, est préservé par le masque `0x8F` de l'écriture de
+vitesse. Aucun lecteur n'était identifié. Il n'y en a pas, et cette fois la recherche est complète.
+
+Les deux octets par effet vivent en **`0x0345 + effet × 2`** (`b0`) et **`0x0346 + effet × 2`**
+(`b1`) — l'adressage se lit en clair en `0x8F5F` :
+
+```asm
+mov dptr,#0x009d ; movx a,@dptr ; add a,acc   ; effet x 2
+mov a,#0x46 ; add a,r7 ; mov dpl,a
+mov a,#0x03 ; addc a,r6 ; mov dph,a           ; DPTR = 0x0346 + effet*2
+```
+
+**Aucun `mov dptr,#0x0340`–`#0x0370` n'existe dans l'image entière**, et le seul autre calcul de base
+en `0x03xx` vise `0x030D` (trois sites, sans rapport). La zone n'est donc joignable que par cet
+idiome, et ses douze sites s'énumèrent :
+
+| Site | Octet | Opération |
+| --- | --- | --- |
+| `0x1166` | `b0` | `rlc a ; mov 0x23,c` — **b0[7] vers le drapeau `0x24.3`** |
+| `0x79C6`, `0x7A5C`, `0x8CBB` | `b0` | `anl a,#0x80` puis réécriture |
+| `0x79D4`, `0x7A6A`, `0x8CC9` | `b0` | lecture |
+| `0x1174` | `b1` | `anl a,#0x0F` — la **couleur** |
+| `0x8F5F`, `0x8F88` | `b1` | `anl a,#0x8F` puis `\| (vitesse << 4)` |
+| `0x93F0`, `0x9404` | `b1` | `anl a,#0xF0` puis `\| couleur` |
+
+Trois masques touchent `b1` : `0x0F` le jette, `0x8F` et `0xF0` le préservent. **Aucun ne
+l'interroge** — pas un `jb acc.7`, pas un `anl a,#0x80` sur cet octet. Le contraste avec `b0[7]`,
+qui a un lecteur explicite en `0x1166`, rend le négatif d'autant plus net.
+
+Ce qui ne veut pas dire que le bit ne sert à rien. Les deux octets vivent dans le **bloc de réglages
+persisté**, que l'hôte lit et écrit — commande USB `0x84`, page 99, et son pendant radio. `b1[7]` est
+donc un bit que le firmware **transporte et préserve pour le logiciel hôte**, sans jamais le
+consulter lui-même. C'est la seule lecture compatible avec les faits.
+
 ### `fcn.00007AAD` — la fonction qui contenait ces octets
 
 Appelée depuis `main` (`0x919A`), gardée par `0x28.1` et `0x29.0`. Elle balaie **trois tableaux
@@ -3592,11 +3674,20 @@ La boucle est bornée à **treize entrées** — la queue de la fonction le dit 
 0x7C11  ret
 ```
 
-Le motif « si l'état est posé et la valeur courante est nulle, recopier la valeur souhaitée » en
-fait une **file de transitions** de treize créneaux, mais elle porte une table de sauts que le
-décompilateur n'arrive pas à normaliser (`Could not find normalized switch variable`), plus un
-chevauchement d'instructions signalé en `0x7E23`. Je ne la documente pas plus loin : le C n'est pas
-fiable ici, et il faudrait la reprendre au désassemblage.
+> **Résolu : c'est le répéteur automatique de la souris.** Les trois tableaux sont exactement ceux
+> que la queue d'appui du rapport souris renseigne (voir « La table `0x865E` ») : `[0x0C37 + i]`
+> reçoit `b2 × 2`, le compte à rebours de répétition ; `[0x0C45 + i]` et `[0x0390 + i]` reçoivent
+> `b3`. Les treize créneaux sont les **treize actions souris**, `i = b1 - 1` ∈ 0–12.
+>
+> Et la table de sauts que le décompilateur n'arrivait pas à normaliser est `0x7B25`. Ses treize
+> cibles sont **octet pour octet celles de `0x865E`** — douze sur treize sont identiques sur leurs
+> cinq premiers octets, et la treizième, l'arm des boutons, ne diffère que par le registre employé
+> (`R6`/`R4` au lieu de `R7`/`R6`). Ce n'est pas une file de transitions : c'est le **rejeu
+> périodique d'une action souris tenue**.
+>
+> Le motif « si l'état est posé et la valeur courante est nulle, recopier la valeur souhaitée » se
+> lit alors sans mystère : le compte à rebours arrive à zéro, l'action est réémise, le compteur est
+> rechargé.
 
 #### Frontières de fonction : les deux outils divergent, et r2 a raison
 
@@ -3712,7 +3803,7 @@ Restent, par ordre décroissant d'intérêt :
 | --- | --- |
 | Passage en mode 2,4 GHz | aucune écriture directe de la valeur 1 dans `g_transport` |
 | Paramètres `0xF0` / `0xF1` de `euart0_reply` | deux appels depuis le parseur, valeurs non interprétées |
-| Opcode `0x4A` | un bloc de 2 octets, charge **remplie de zéros** par `0x3CF9` — probablement une fin de transfert |
+| Opcode `0x4A` | **résolu — c'est une requête de statut**, voir ci-dessous |
 | Handlers 8, 9, 10 du séquenceur | `0x3D25` et `0x3D1D`, n'émettent aucun opcode |
 
 ### Ce que le décompilateur ajoute sur `euart0_parse`
