@@ -88,6 +88,96 @@ uint16_t aula_rgb_duty(uint8_t value)
 #endif
 }
 
+
+/* ------------------------------------------------------------ roue d'usine */
+
+/*
+ * Roue de teintes du firmware d'usine, CODE 0x2B2A : 192 triplets, 576 octets
+ * de flash recopiés tels quels du dump.
+ *
+ * Elle vaut son poids : ses rampes ne sont PAS linéaires (1, 3, 5, 7, 10, 14,
+ * 18, 22, 26, 32, 38, 44...), c'est une courbe perceptuelle. La roue de
+ * `src/smk/led_effect.c` est une interpolation linéaire sur trois secteurs et
+ * ne donne pas les mêmes couleurs. Utiliser celle-ci, c'est retrouver l'aspect
+ * du firmware d'origine.
+ *
+ * ORDRE DES OCTETS -- la feuille de relevé laisse la question ouverte, en
+ * signalant que cinq moteurs lisent le triplet comme (R,G,B) et un seul,
+ * `0x7C12`, comme (B,G,R), et que « le dump ne permet pas de trancher ».
+ *
+ * Les octets eux-mêmes ne trancheront pas non plus, et on peut désormais dire
+ * POURQUOI : une roue de teintes est SYMÉTRIQUE par échange des canaux. Lue en
+ * (R,G,B) la table parcourt rouge -> jaune -> vert -> cyan -> bleu -> magenta ;
+ * lue en (B,G,R) elle parcourt exactement le même cercle dans l'autre sens.
+ * Les deux sont des roues valides, et aucune structure des données ne les
+ * distingue.
+ *
+ * Ce qui reste, ce sont les conséquences : la question n'est pas « quelles
+ * couleurs » mais « dans quel sens tourne l'arc-en-ciel ». On retient (R,G,B),
+ * ce que font cinq des six moteurs d'usine ; se tromper ne coûte que le sens de
+ * rotation.
+ */
+static const __code uint8_t wheel[AULA_RGB_WHEEL_SIZE][3] = {
+    {255,  1,  0}, {255,  3,  0}, {255,  5,  0}, {255,  7,  0},
+    {255, 10,  0}, {255, 14,  0}, {255, 18,  0}, {255, 22,  0},
+    {255, 26,  0}, {255, 32,  0}, {255, 38,  0}, {255, 44,  0},
+    {255, 50,  0}, {255, 57,  0}, {255, 65,  0}, {255, 73,  0},
+    {255, 81,  0}, {255, 89,  0}, {255, 99,  0}, {255,109,  0},
+    {255,119,  0}, {255,129,  0}, {255,140,  0}, {255,152,  0},
+    {255,164,  0}, {255,176,  0}, {255,188,  0}, {255,200,  0},
+    {255,213,  0}, {255,227,  0}, {255,241,  0}, {255,255,  0},
+    {248,255,  0}, {234,255,  0}, {220,255,  0}, {206,255,  0},
+    {194,255,  0}, {182,255,  0}, {170,255,  0}, {158,255,  0},
+    {146,255,  0}, {134,255,  0}, {124,255,  0}, {114,255,  0},
+    {104,255,  0}, { 94,255,  0}, { 85,255,  0}, { 77,255,  0},
+    { 69,255,  0}, { 61,255,  0}, { 53,255,  0}, { 47,255,  0},
+    { 41,255,  0}, { 35,255,  0}, { 29,255,  0}, { 24,255,  0},
+    { 20,255,  0}, { 16,255,  0}, { 12,255,  0}, {  8,255,  0},
+    {  6,255,  0}, {  4,255,  0}, {  2,255,  0}, {  0,255,  0},
+    {  0,255,  1}, {  0,255,  3}, {  0,255,  5}, {  0,255,  7},
+    {  0,255, 10}, {  0,255, 14}, {  0,255, 18}, {  0,255, 22},
+    {  0,255, 26}, {  0,255, 32}, {  0,255, 38}, {  0,255, 44},
+    {  0,255, 50}, {  0,255, 57}, {  0,255, 65}, {  0,255, 73},
+    {  0,255, 81}, {  0,255, 89}, {  0,255, 99}, {  0,255,109},
+    {  0,255,119}, {  0,255,129}, {  0,255,140}, {  0,255,152},
+    {  0,255,164}, {  0,255,176}, {  0,255,188}, {  0,255,200},
+    {  0,255,213}, {  0,255,227}, {  0,255,241}, {  0,255,255},
+    {  0,248,255}, {  0,234,255}, {  0,220,255}, {  0,206,255},
+    {  0,194,255}, {  0,182,255}, {  0,170,255}, {  0,158,255},
+    {  0,146,255}, {  0,134,255}, {  0,124,255}, {  0,114,255},
+    {  0,104,255}, {  0, 94,255}, {  0, 85,255}, {  0, 77,255},
+    {  0, 69,255}, {  0, 61,255}, {  0, 53,255}, {  0, 47,255},
+    {  0, 41,255}, {  0, 35,255}, {  0, 29,255}, {  0, 24,255},
+    {  0, 20,255}, {  0, 16,255}, {  0, 12,255}, {  0,  8,255},
+    {  0,  6,255}, {  0,  4,255}, {  0,  2,255}, {  0,  0,255},
+    {  1,  0,255}, {  3,  0,255}, {  5,  0,255}, {  7,  0,255},
+    { 10,  0,255}, { 14,  0,255}, { 18,  0,255}, { 22,  0,255},
+    { 26,  0,255}, { 32,  0,255}, { 38,  0,255}, { 44,  0,255},
+    { 50,  0,255}, { 57,  0,255}, { 65,  0,255}, { 73,  0,255},
+    { 81,  0,255}, { 89,  0,255}, { 99,  0,255}, {109,  0,255},
+    {119,  0,255}, {129,  0,255}, {140,  0,255}, {152,  0,255},
+    {164,  0,255}, {176,  0,255}, {188,  0,255}, {200,  0,255},
+    {213,  0,255}, {227,  0,255}, {241,  0,255}, {255,  0,255},
+    {255,  0,248}, {255,  0,234}, {255,  0,220}, {255,  0,206},
+    {255,  0,194}, {255,  0,182}, {255,  0,170}, {255,  0,158},
+    {255,  0,146}, {255,  0,134}, {255,  0,124}, {255,  0,114},
+    {255,  0,104}, {255,  0, 94}, {255,  0, 85}, {255,  0, 77},
+    {255,  0, 69}, {255,  0, 61}, {255,  0, 53}, {255,  0, 47},
+    {255,  0, 41}, {255,  0, 35}, {255,  0, 29}, {255,  0, 24},
+    {255,  0, 20}, {255,  0, 16}, {255,  0, 12}, {255,  0,  8},
+    {255,  0,  6}, {255,  0,  4}, {255,  0,  2}, {255,  0,  0},
+};
+
+void aula_rgb_wheel(uint8_t index, uint8_t out[3])
+{
+    if (index >= AULA_RGB_WHEEL_SIZE) {
+        index = (uint8_t)(index % AULA_RGB_WHEEL_SIZE);
+    }
+    out[0] = wheel[index][0];
+    out[1] = wheel[index][1];
+    out[2] = wheel[index][2];
+}
+
 void aula_rgb_clear(void)
 {
     uint8_t col;

@@ -38,8 +38,33 @@ void user_matrix_scan_post(void)
     GPIO_INPUT(6, KB_C_P6_MASK);
 }
 
+/*
+ * Instantané de l'état des touches, pour le rétroéclairage réactif.
+ *
+ * `src/smk/matrix.c` garde son tableau `matrix[]` privé et ses crochets ne
+ * reçoivent pas la position ; `kb_process_record()` ne voit qu'un keycode. Or
+ * le moteur réactif a besoin de (ligne, colonne).
+ *
+ * La position transite pourtant ici deux fois par colonne : `col_select` la
+ * reçoit, et `read_rows` est appelée juste après. Mémoriser l'une et ranger
+ * l'autre suffit, sans toucher à une seule ligne de code partagé. Coût : quinze
+ * octets et un rangement par lecture de lignes.
+ *
+ * Le balayage de matrice et les sous-trames LED s'excluent dans le temps
+ * (`tick.c` les alterne dans la même ISR), donc pas de course à craindre.
+ */
+static __xdata uint8_t scan_pressed[MATRIX_COLS];
+static uint8_t         scan_col;
+
+uint8_t user_matrix_pressed(uint8_t col)
+{
+    return (col < MATRIX_COLS) ? scan_pressed[col] : 0;
+}
+
 void user_matrix_col_select(uint8_t col) // actif bas : on tire à 0
 {
+    scan_col = col;
+
     switch (col) {
         case 0:  KB_C0  = 0; break;
         case 1:  KB_C1  = 0; break;
@@ -88,7 +113,14 @@ void user_matrix_col_deselect(uint8_t col)
  */
 uint8_t user_matrix_read_rows(void)
 {
-    return (uint8_t)((P7 & 0x0f) | ((P5 << 1) & 0x30) | 0xc0);
+    const uint8_t raw = (uint8_t)((P7 & 0x0f) | ((P5 << 1) & 0x30) | 0xc0);
+
+    /* Lignes actives basses : un bit à 1 dans l'instantané est une touche
+     * enfoncée. `matrix.c` fait le même complément de son côté. */
+    if (scan_col < MATRIX_COLS) {
+        scan_pressed[scan_col] = (uint8_t)(~raw) & 0x3f;
+    }
+    return raw;
 }
 
 void user_matrix_sinks_off(void)

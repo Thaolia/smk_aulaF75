@@ -130,6 +130,14 @@
  * colonnes entre le scan et le multiplexage LED. */
 #define LED_SUBFRAMES_PER_SCAN MATRIX_COLS
 
+/*
+ * Instantané de l'état des touches par colonne, bit N = ligne N enfoncée.
+ * Alimenté par les crochets de scan de `user_matrix.c`, consommé par le moteur
+ * réactif : `matrix.c` garde son tableau privé et ses crochets ne passent pas
+ * la position, mais nos propres crochets, eux, la voient.
+ */
+uint8_t user_matrix_pressed(uint8_t col);
+
 /* Dix crans de luminosité : la table de gain d'usine en CODE 0x2937 en compte
  * dix (00 08 10 18 20 28 32 3c 46 50), bornée par CODE[0xA8D5+effet] = 9. */
 #define LED_BRIGHTNESS_LEVELS 10

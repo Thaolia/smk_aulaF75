@@ -65,6 +65,31 @@ static const __code uint8_t led_brightness_gain[LED_BRIGHTNESS_LEVELS] = {
 static const __code uint8_t led_speeds[] = {1, 2, 4, 8, 16};
 #define LED_SPEED_LEVELS (sizeof(led_speeds))
 
+/*
+ * Les effets. Les quatre premiers viennent de `led_effect.c`, partagé ; on lui
+ * emprunte sa GÉOMÉTRIE (`led_effect_index`) mais pas ses couleurs, qui sont une
+ * interpolation linéaire sur trois secteurs. La teinte vient de la roue d'usine,
+ * dont les rampes sont perceptuelles.
+ *
+ * Le cinquième est propre à ce clavier : le moteur réactif du firmware d'usine
+ * (`fcn.000064F1`, l'effet d'indice 12), où chaque touche porte sa couleur et
+ * son intensité, et où l'intensité décroît d'une trame à l'autre. C'est l'effet
+ * le plus caractéristique du F75, et le seul qui demande de savoir QUELLE touche
+ * a été frappée.
+ */
+#define AULA_FX_REACTIVE ((uint8_t)FX_COUNT)       /* 4 */
+#define AULA_FX_OFF      ((uint8_t)(FX_COUNT + 1)) /* 5 */
+
+/*
+ * État du moteur réactif. Le firmware d'usine y met 378 octets de couleur et
+ * 126 d'intensité ; ici une teinte sur la roue suffit, ce qui tient en un octet
+ * par touche au lieu de trois.
+ */
+#define REACT_DECAY 8 /* points d'intensité perdus par trame */
+static __xdata uint8_t react_hue[LED_COLS][LED_ROWS];
+static __xdata uint8_t react_val[LED_COLS][LED_ROWS];
+static __xdata uint8_t react_prev[LED_COLS];
+
 #define LED_BRIGHTNESS_DEFAULT (LED_BRIGHTNESS_LEVELS - 1)
 #define LED_SPEED_DEFAULT      2
 
@@ -132,13 +157,41 @@ void indicators_pwm_disable(void)
  * phase par trame et non par sous-trame évite que baisser la luminosité ne
  * ralentisse aussi l'effet.
  */
+static uint8_t led_scale(uint8_t value, uint8_t gain)
+{
+    return (uint8_t)(((uint16_t)value * gain) >> 8);
+}
+
 static void led_regen_one(void)
 {
-    uint8_t rgb[3];
+    const uint8_t gain = led_brightness_gain[user_settings.led_brightness];
+    uint8_t       rgb[3];
 
-    if (led_effect_rgb((led_effect_t)user_settings.led_effect, regen_row, regen_col, led_phase,
-                       led_brightness_gain[user_settings.led_brightness], rgb)) {
-        aula_rgb_set(regen_row, regen_col, rgb[0], rgb[1], rgb[2]);
+    if (user_settings.led_effect == AULA_FX_REACTIVE) {
+        const uint8_t val = react_val[regen_col][regen_row];
+
+        if (val == 0) {
+            aula_rgb_set(regen_row, regen_col, 0, 0, 0);
+        } else {
+            const uint8_t k = led_scale(val, gain);
+
+            aula_rgb_wheel(react_hue[regen_col][regen_row], rgb);
+            aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], k), led_scale(rgb[1], k),
+                         led_scale(rgb[2], k));
+            react_val[regen_col][regen_row] =
+                (val > REACT_DECAY) ? (uint8_t)(val - REACT_DECAY) : 0;
+        }
+    } else if (user_settings.led_effect == (uint8_t)FX_SOLID) {
+        aula_rgb_set(regen_row, regen_col, gain, gain, gain); /* blanc */
+    } else {
+        /* Géométrie de SMK, couleurs d'usine : l'index sur 0-255 est ramené aux
+         * 192 entrées de la roue. */
+        const uint8_t idx =
+            led_effect_index((led_effect_t)user_settings.led_effect, regen_row, regen_col, led_phase);
+
+        aula_rgb_wheel((uint8_t)(((uint16_t)idx * AULA_RGB_WHEEL_SIZE) >> 8), rgb);
+        aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
+                     led_scale(rgb[2], gain));
     }
 
     if (++regen_col >= LED_COLS) {
@@ -161,12 +214,40 @@ void indicators_pre_update(void)
     indicators_pwm_disable();
 }
 
+/*
+ * Détection des frappes pour le moteur réactif : une colonne par sous-trame,
+ * donc chaque colonne est examinée une fois par balayage LED -- exactement la
+ * cadence à laquelle `matrix.c` la rafraîchit. Seuls les fronts comptent, une
+ * touche maintenue ne réamorce pas.
+ */
+static void led_react_poll(void)
+{
+    const uint8_t now   = user_matrix_pressed(led_col);
+    const uint8_t fresh = (uint8_t)(now & (uint8_t)~react_prev[led_col]);
+
+    react_prev[led_col] = now;
+
+    if (fresh == 0) {
+        return;
+    }
+    for (uint8_t row = 0; row < LED_ROWS; row++) {
+        if (fresh & (uint8_t)(1u << row)) {
+            react_hue[led_col][row] = led_phase;
+            react_val[led_col][row] = 255;
+        }
+    }
+}
+
 bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 {
     (void)keyboard;      /* les indicateurs d'état ne sont pas encore portés */
     (void)current_step;  /* `tick.c` passe toujours 0 */
 
-    if (user_settings.led_effect < FX_OFF) {
+    if (user_settings.led_effect == AULA_FX_REACTIVE) {
+        led_react_poll();
+    }
+
+    if (user_settings.led_effect < AULA_FX_OFF) {
         led_regen_one();
 
         /* Charger les dix-huit rapports cycliques PENDANT que les bancs sont
@@ -198,7 +279,7 @@ void indicators_apply_defaults(void)
 
 void indicators_validate_settings(void)
 {
-    if (user_settings.led_effect > FX_OFF) {
+    if (user_settings.led_effect > AULA_FX_OFF) {
         user_settings.led_effect = FX_RADIAL;
     }
     if (user_settings.led_brightness >= LED_BRIGHTNESS_LEVELS) {
@@ -228,7 +309,7 @@ void indicators_start(void)
 
 void indicators_next_effect(void)
 {
-    if (++user_settings.led_effect > FX_OFF) {
+    if (++user_settings.led_effect > AULA_FX_OFF) {
         user_settings.led_effect = 0;
     }
     aula_rgb_clear(); /* l'effet précédent laisserait ses pixels derrière lui */
@@ -238,7 +319,7 @@ void indicators_next_effect(void)
 void indicators_prev_effect(void)
 {
     if (user_settings.led_effect == 0) {
-        user_settings.led_effect = FX_OFF;
+        user_settings.led_effect = AULA_FX_OFF;
     } else {
         user_settings.led_effect--;
     }

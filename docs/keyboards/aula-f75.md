@@ -1062,6 +1062,22 @@ Cela fait **cinq** moteurs en `(R,G,B)` contre **un seul**, `0x7C12`, en `(B,G,R
 l'étourderie du firmware prend nettement le dessus sur celle de l'arc-en-ciel volontairement
 inversé.
 
+> **Ce point ne se tranchera jamais sur le dump, et on peut maintenant dire pourquoi.** Les 192
+> triplets de `0x2B2A` ont été extraits et lus : le premier canal part à 255 pendant que le
+> deuxième monte, puis le premier retombe, puis le troisième monte, etc. — un cercle de teintes
+> parfaitement régulier, avec des rampes non linéaires (1, 3, 5, 7, 10, 14, 18, 22, 26, 32, 38,
+> 44…), donc perceptuelles.
+>
+> Or **une roue de teintes est symétrique par échange des canaux extrêmes**. Lue en `(R,G,B)` la
+> table parcourt rouge → jaune → vert → cyan → bleu → magenta ; lue en `(B,G,R)` elle parcourt
+> exactement le même cercle dans l'autre sens. Les deux sont des roues valides et **aucune
+> structure des données ne les distingue** : ce n'est pas un manque d'information sur cette table,
+> c'est une propriété de l'objet.
+>
+> La question n'est donc pas « quelles couleurs » mais « dans quel sens tourne l'arc-en-ciel », et
+> le coût de se tromper se limite au sens de rotation. Le portage retient `(R,G,B)`, ce que font
+> cinq des six moteurs.
+
 ### `XRAM 0x009D` — index d'effet RGB
 
 Vingt sites y accèdent. Trois convergences l'identifient :

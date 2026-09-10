@@ -49,6 +49,10 @@
 #    define AULA_RGB_DUTY1 0u
 #endif
 
+/* Roue de teintes d'usine (CODE 0x2B2A), 192 entrées. */
+#define AULA_RGB_WHEEL_SIZE 192
+void aula_rgb_wheel(uint8_t index, uint8_t out[3]);
+
 /* Éteint tout le framebuffer. */
 void     aula_rgb_clear(void);
 void     aula_rgb_set(uint8_t row, uint8_t col, uint8_t red, uint8_t green, uint8_t blue);
