@@ -2378,9 +2378,15 @@ dongle*. Le `CLR 0x2C.5` de `0x8793` dit le reste — quand les deux bits sont p
 réinitialisation gagne et l'appairage est abandonné, pas mis en file.
 
 Un second consommateur de `0x2C.5` existe, en `0x44BD`, et il émet `R7 = 0` : une simple
-reconnexion. Il exige `g_transport == 2` alors que le seul poseur du bit exige `g_transport == 1` —
-il est donc inatteignable sans changement de transport entre la pose et la lecture. Noté, pas
-expliqué.
+reconnexion. Il exige `g_transport == 2` alors que le seul poseur du bit exige `g_transport == 1`.
+
+> **Résolu.** Le changement de transport entre la pose et la lecture n'est pas hypothétique : c'est
+> ce que font les touches d'emplacement Bluetooth. `0x44BD` est le **chemin de relâchement** de
+> `0x412C`, atteint quand l'usage `b3` vaut `5`, `6` ou `7` — les trois arms qui écrivent
+> `g_transport = 2`. La séquence est donc : appui long sur la touche d'appairage en 2,4 GHz (le bit
+> se pose), puis appui sur une touche d'emplacement Bluetooth (le transport passe à 2), puis
+> relâchement — et `0x44BD` émet la reconnexion et efface le bit. Voir « Le quatrième répartiteur »
+> plus bas.
 
 `0xEF5A` n'est d'ailleurs pas qu'un émetteur : après `0xED89` il efface le bit `0x69` et recharge
 `IDATA[0x18] = 6`, `IDATA[0x17] = 0xFF` — le superviseur de lien repart à neuf.
@@ -3124,11 +3130,109 @@ la couche Fn inversée, ce qui est l'usage courant sur ces claviers.
 L'enregistrement se lit finalement :
 
 ```
-b0  selecteur de rapport   -> 0x0D18   (0x00 clavier, 0x02 consumer, autres a determiner)
+b0  selecteur de rapport   -> 0x0D18   (neuf valeurs, toutes decodees : voir ci-dessous)
 b1  classe d'action        -> 0x0D17
 b2  parametre              -> 0x0D16
 b3  usage                  -> 0x0D15
 ```
+
+#### Le quatrième répartiteur — `0x8845`, neuf sélecteurs de rapport
+
+La ligne ci-dessus portait « autres à déterminer ». Elle n'a plus lieu d'être : `b0` est la clé d'un
+**quatrième appel** au répartiteur inline `0x4E45`, en `0x8845`, et ses neuf entrées énumèrent
+exactement les valeurs que `b0` peut prendre.
+
+##### La chaîne, de l'appui au répartiteur
+
+```asm
+0x699A  a = [0x030D] ; a += a ; dptr = 0xD800 + [0x030D] * 512   ; page de PROFIL actif
+0x69B4  a = [0x02E0]                                             ; index de touche
+0x69B9  lcall 0x8818
+        0x8818  mov b,#4 ; lcall 0x4E39      ; dptr += index * 4  -> l'enregistrement
+        0x881E  lcall 0x4DEC                 ; charger les 4 octets
+        0x8821  mov r0,#0x18 ; lcall 0x4DC5  ; decaler de 24 bits
+        0x882A  movx [0x0D18], r7            ; b0
+        0x8844  a = [0x0D18] ; lcall 0x4E45  ; <<< repartir sur b0
+```
+
+`b1` a déjà été extrait par l'appelant (`0x6992`, décalage de 16 bits) — les deux répartiteurs
+travaillent donc sur le **même enregistrement de quatre octets**, `b0` choisissant la voie et `b1`
+l'action à l'intérieur de la voie. Deux appelants seulement : `0x69B9` et `0x6A87`.
+
+Chaque arm commence par les mêmes gardes que le répartiteur de raccourcis — `0x4D` et `0x55`
+posés ⇒ abandon — encodées tantôt en `JNB`+`LJMP`, tantôt en `JB` court : c'est la même condition.
+
+##### Les neuf
+
+| `b0` | Arm | Voie |
+| --- | --- | --- |
+| `0x00` | `0x7018` | **rapport clavier** |
+| `0x01` | `0x85FB` | **actions spéciales**, via une *cinquième* table de sauts |
+| `0x02` | `0x001E` | **rapport Consumer** |
+| `0x03` | `0xA37E` | **file d'émission radio** |
+| `0x04` | `0xB041` | rapport brut à trois octets |
+| `0x07` | `0x412C` | **raccourcis clavier** |
+| `0x08` | `0xA674` | **répartiteur de classe d'action** sur `b1` |
+| `0x09` | *inline `0x88B8`* | maintient une valeur 0–3 en `[0x030E]` |
+| `0x0D` | `0xAD64` | pose deux bits d'état tenus |
+| *défaut* | `0x8919` | **`RET`** — un `b0` inconnu ne fait rien |
+
+##### Ce que chaque voie fait, et ce qu'elle confirme
+
+**`b0 = 0` — le rapport clavier.** `b1` y sert de **masque** : `[0x08B2] |= b1` à l'appui,
+`[0x08B2] &= ~b1` au relâchement ; `b3` et `b2` partent dans le rapport via `0x8CF8` (appui) ou
+`0x3034` (relâchement). C'est la voie qui **valide la lecture « six modificateurs »** de la section
+suivante : les positions portant une puissance de deux en `b1` passent par ici, et c'est ici que le
+masque est appliqué.
+
+**`b0 = 1` — les actions spéciales.** Une **cinquième table de sauts**, en `0x865E`, treize entrées
+de trois octets indexées par `b1 - 1` : les cinq premières partagent `0x8685`, les huit autres vont
+en `0x8699`, `0x869E`, `0x86A3`, `0x86AB`, `0x86B3`, `0x86B8`, `0x86BD`, `0x86C7`. Au relâchement,
+`[0x09B1] &= CODE 0xEF04[b1 - 1]`.
+
+**`b0 = 2` — le rapport Consumer.** `[0x09BD] = b3`, `[0x09BE] = b2`, bit `0x50` posé. Exactement
+la structure que cette page décrit ailleurs : `0x09BC` porte le Report ID 2 et `0x09BD:0x09BE`
+l'usage Consumer sur seize bits. Les deux relevés se rejoignent.
+
+**`b0 = 3` — la file d'émission radio.** Écrit `[0x02CE]`–`[0x02D2]`, puis recopie 8 puis 16 octets
+via `memcpy_idata` dans une structure de **28 octets par hôte** indexée par `g_radio_host_idx`,
+à partir de `0x0C57`. **C'est la file circulaire de six emplacements de 28 octets** que cette page
+identifie côté radio, atteinte ici par une voie complètement différente.
+
+**`b0 = 4` — un rapport brut.** `[0x08C0] = b0`, `[0x08C1] = b2`, `[0x08C2] = b3` à l'appui, zéros au
+relâchement, bit `0x3C` posé.
+
+**`b0 = 7` — les raccourcis.** `0x412C` appelle `0x4E45` avec **`b3`** comme clé : c'est le
+répartiteur `0x4136` décrit plus haut. **La clé des raccourcis est donc l'octet d'usage de
+l'enregistrement de remap**, ce qui referme la boucle : les clés `0x00`–`0x1D` de cette table sont
+des valeurs de `b3` dans la page de profil.
+
+Son chemin de **relâchement** décide selon `b3` :
+
+| `b3` relâché | Effet |
+| --- | --- |
+| `4` | remet le compteur d'appui long à zéro (abandon de la réinitialisation) |
+| `5`, `6`, `7` | si `g_transport == 2` et `0x2C.5` posé : `rf_link_select(bt_slot, 0)`, puis efface le bit |
+| `0x0A` | remet `[0x0C52:0x0C53]` à zéro |
+| `0x1D` | muet / famille d'effet |
+
+**`b0 = 8` — le répartiteur de classe** `0xA674`, déjà décrit plus haut : classes 0 à 9, dont 5/6/7
+partagent `fx_mode_toggle`.
+
+**`b0 = 9` — une valeur 0–3 en `[0x030E]`**, avec quatre opérations selon `b1` : `0` charge `b2`,
+`1` incrémente en plafonnant à 3, `2` décrémente en plancher à 0, `3` fait cycler 0→1→2→0. Puis
+`[0x08C0..0x08C2] = 9, 0, 1`.
+
+> **`[0x030E]` n'est lu nulle part.** Une recherche de tous les accès `mov dptr,#0x030E` sur l'image
+> entière donne **quatre sites, tous dans cet arm**, et l'adresse est hors de portée de `MOVX @Ri`
+> puisque `P2` n'est jamais qu'à zéro. Ce `b0` entretient donc un réglage que rien ne consomme dans
+> ce firmware. Constaté, pas expliqué — et à ne pas confondre avec `[0x030D]`, qui est bien lu, par
+> dix-huit sites, tous avec le même idiome `0xD800 + [0x030D] * 512`.
+
+**`b0 = 0x0D` — deux bits tenus.** Selon `b1 == 0` ou non, et selon appui ou relâchement, pose ou
+efface les bits **`0x44`** et **`0x43`**. Ce sont **exactement les deux bits que l'arm de l'effet
+`0x2D` (`0x1A04`) teste** avant d'appeler `0x8A1A`. Une touche de cette voie conditionne donc le
+travail par trame de cet effet — deux tables décodées séparément qui se referment l'une sur l'autre.
 
 #### Les six modificateurs, et la tension sur `0x0D17` levée
 
