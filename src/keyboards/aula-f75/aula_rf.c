@@ -197,6 +197,32 @@ static __xdata uint8_t  batt_ticks;   /* compteur d'amortissement */
 static __bit            batt_low;
 
 /*
+ * File d'émission des rapports de frappe, transcrite de `0x0C57`.
+ *
+ * Le firmware d'usine garde une file circulaire de SIX emplacements de
+ * VINGT-HUIT octets, index d'écriture en `XRAM 0x0307`, de lecture en `0x030C`,
+ * consommée par `hid_report_radio` (`fcn.000044F6`). L'octet 0 de
+ * l'emplacement EST l'octet de commande : type 2 -> 28 octets recopiés puis une
+ * trame de 30, type 3 -> 11 octets puis une trame de 13.
+ *
+ * Sans elle, une frappe émise pendant qu'une rafale est en vol, ou avec `P4.7`
+ * bas, est perdue sans trace : `rf_send_payload_long()` rendait `false` et
+ * `kb.c` ignorait le retour.
+ *
+ * Débordement : on écrase le plus ancien, ce que fait aussi le firmware d'usine
+ * (son index d'écriture reboucle sans consulter celui de lecture). Six
+ * emplacements à 260 kbauds représentent une réserve d'environ deux
+ * millisecondes ; les atteindre veut dire que le module ne répond plus, auquel
+ * cas la fraîcheur prime sur l'exhaustivité.
+ */
+#define RF_Q_SLOTS 6
+#define RF_Q_SIZE  28
+static __xdata uint8_t q_buf[RF_Q_SLOTS][RF_Q_SIZE];
+static __xdata uint8_t q_head;
+static __xdata uint8_t q_tail;
+static __xdata uint8_t q_count;
+
+/*
  * Compteurs d'anti-rebond du sélecteur, un par position (0x08BD/0x02DF/0x0960).
  *
  * Le firmware d'usine exige dix passages consécutifs de son tic lent. SMK n'a
@@ -358,43 +384,66 @@ static bool rf_send_status_probe(void)
  * MÊMES drapeaux que la chaîne USB — donc que le contenu est celui des rapports
  * HID. Le placement à l'offset 0 est le choix le plus naturel, pas une lecture.
  */
-static bool rf_send_payload_long(const __xdata uint8_t *data, uint8_t len)
+/* Range un rapport dans la file ; l'octet 0 de l'emplacement est la commande. */
+static void rf_queue_report(uint8_t cmd, const __xdata uint8_t *data, uint8_t len)
 {
-    if (!rf_can_send() || len > (RF_LEN_REPORT_L - 3)) {
-        return false;
+    __xdata uint8_t *slot = q_buf[q_head];
+
+    if (len > (RF_Q_SIZE - 1)) {
+        return;
     }
-    rf_frame_begin(RF_CMD_REPORT_L);
+
+    if (q_count >= RF_Q_SLOTS) {
+        q_tail = (uint8_t)((q_tail + 1u) % RF_Q_SLOTS);
+        q_count--;
+    }
+
+    memset(slot, 0, RF_Q_SIZE);
+    slot[0] = cmd;
     for (uint8_t i = 0; i < len; i++) {
-        tx_buf[2 + i] = data[i];
+        slot[1 + i] = data[i];
     }
-    return rf_send_frame(RF_LEN_REPORT_L);
+
+    q_head = (uint8_t)((q_head + 1u) % RF_Q_SLOTS);
+    q_count++;
 }
 
-static bool rf_send_payload_short(const __xdata uint8_t *data, uint8_t len)
+/*
+ * Vide la file. Une seule trame part par passage : `rf_send_frame()` amorce la
+ * rafale et l'ISR l'achève, donc `rf_can_send()` est faux au tour suivant.
+ */
+static void rf_queue_flush(void)
 {
-    if (!rf_can_send() || len > (RF_LEN_REPORT_S - 3)) {
-        return false;
+    while (q_count != 0 && rf_can_send()) {
+        const __xdata uint8_t *slot = q_buf[q_tail];
+        const uint8_t          len =
+            (slot[0] == RF_CMD_REPORT_L) ? RF_LEN_REPORT_L : RF_LEN_REPORT_S;
+
+        tx_buf[0] = RF_HDR;
+        for (uint8_t i = 0; i < (uint8_t)(len - 2); i++) {
+            tx_buf[1 + i] = slot[i];
+        }
+        if (!rf_send_frame(len)) {
+            return; /* on garde l'emplacement pour le prochain passage */
+        }
+        q_tail = (uint8_t)((q_tail + 1u) % RF_Q_SLOTS);
+        q_count--;
     }
-    rf_frame_begin(RF_CMD_REPORT_S);
-    for (uint8_t i = 0; i < len; i++) {
-        tx_buf[2 + i] = data[i];
-    }
-    return rf_send_frame(RF_LEN_REPORT_S);
 }
 
 void rf_send_report(__xdata report_keyboard_t *report)
 {
-    (void)rf_send_payload_long(report->raw, KEYBOARD_REPORT_SIZE);
+    rf_queue_report(RF_CMD_REPORT_L, report->raw, KEYBOARD_REPORT_SIZE);
 }
 
 void rf_send_nkro(__xdata report_nkro_t *report)
 {
-    (void)rf_send_payload_long(report->raw, NKRO_REPORT_SIZE);
+    rf_queue_report(RF_CMD_REPORT_L, report->raw, NKRO_REPORT_SIZE);
 }
 
 void rf_send_extra(__xdata report_extra_t *report)
 {
-    (void)rf_send_payload_short(report->raw, EXTRA_REPORT_SIZE);
+    rf_queue_report(RF_CMD_REPORT_S, report->raw, EXTRA_REPORT_SIZE);
 }
 
 /* ---------------------------------------------------------------- réception */
@@ -788,6 +837,9 @@ void rf_init(void)
     batt_shown      = 0;
     batt_ticks      = 0;
     batt_low        = 0;
+    q_head          = 0;
+    q_tail          = 0;
+    q_count         = 0;
     deb_wired = deb_24g = deb_bt = 0;
 
     rf_uart_init();
@@ -865,6 +917,7 @@ void rf_task(void)
             link_tx_pending = 0;
             (void)rf_send_link(rf_link_slot(), link_tx_flag);
         }
+        rf_queue_flush();
         rf_probe_task();
     }
 

@@ -3410,6 +3410,25 @@ Et les drapeaux qui remplissent la file sont **les mêmes** que ceux de la chaî
 type 3. Les deux transports se partagent la même source d'événements — ce qui referme le raccord
 décrit plus haut.
 
+
+> **Portée.** `aula_rf.c` reprend la file telle quelle : six emplacements de 28 octets, index
+> d'écriture et de lecture séparés, l'octet 0 de l'emplacement servant d'octet de commande, et le
+> même découpage 28 → trame de 30 / 11 → trame de 13. Sans elle, toute frappe émise pendant qu'une
+> rafale était en vol, ou avec `P4.7` bas, était **perdue sans trace** : `rf_send_payload_long()`
+> rendait `false` et `kb.c` ignorait le retour.
+>
+> Le débordement écrase le plus ancien, comme en usine — son index d'écriture reboucle sans
+> consulter celui de lecture. Six emplacements représentent environ deux millisecondes de réserve à
+> 260 kbauds ; les atteindre signifie que le module ne répond plus, auquel cas la fraîcheur prime.
+>
+> **Ce qui n'est PAS repris : l'extinction de relâchement de l'Air60.** Son pilote SPI martèle six
+> fois le dernier relâchement en alternant un rapport vide et un rapport portant `0x01` en
+> `keys[0]` (*ErrorRollOver*), pour qu'aucun des deux ne soit dédupliqué en aval. C'est un
+> contournement pour un bus sans acquittement applicatif, et **rien d'équivalent n'a été observé
+> dans le firmware d'usine du F75**. La file, elle, traite la même panne à la source : un
+> relâchement qui ne peut pas partir est mis en attente et rejoué. L'inventer par analogie aurait
+> été du code sans source.
+
 ### Grammaire des trames — établie
 
 Le format est décodé, et une commande l'est sémantiquement.
