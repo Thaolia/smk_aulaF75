@@ -69,6 +69,7 @@ bool rf_connected(void);
 uint8_t rf_bt_slot(void);
 void    rf_set_bt_slot(uint8_t slot);
 
+
 /*
  * Réaffirme le lien courant avec le drapeau « appairage » de la commande 0x01.
  * Le firmware d'usine fait la même chose depuis son tic lent quand le raccourci

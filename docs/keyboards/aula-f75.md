@@ -3410,11 +3410,14 @@ Un **amortissement décélérant** : plus la valeur affichée approche du réel,
 
 > Cette courbe était signalée comme inexpliquée depuis le début de l'analyse. Elle l'est.
 
-> **Attention à la base, relevée au moment du portage.** Une première rédaction glosait ces octets
-> en « écart 0–9 → **20** tics ; 10–19 → **10** ; 20–29 → **5** ; au-delà → **2** » — c'est lire un
-> extrait hexadécimal comme du décimal. Ce sont des octets de flash, et le remplissage à deux
-> chiffres de `05` et `02` le confirme : les délais sont **32, 16, 5 puis 2 tics**. Les deux
-> lectures ne coïncident que sur les deux dernières valeurs. Le portage transcrit les octets bruts.
+Écart de 0–9 → 20 tics par pas ; 10–19 → 10 ; 20–29 → 5 ; au-delà → 2.
+
+> **Le listing ci-dessus est en DÉCIMAL, pas en hexadécimal**, contrairement à la plupart des
+> extraits de cette page. Le portage s'y est laissé prendre : il a « corrigé » la glose en 32, 16,
+> 5, 2 en supposant `0x20 0x10 0x05 0x02`, puis relu le dump. Les octets réels sont
+> `14 0a 05 02 02 02 02 02 02 02 02 02` — **20, 10, 5 puis 2**. La prose avait raison, la
+> correction était fausse, et le dump a tranché. Leçon retenue : sur cette page, vérifier la base
+> avant de corriger une glose.
 
 Le sens de convergence est choisi par `0x26.0`, avec deux compteurs distincts (`0x08C5` à la
 montée, `0x08DC` à la descente) et un traitement particulier à 100 % selon `0x2D.3`.
@@ -3507,6 +3510,20 @@ leurs chargements DPTR.
 | `0xAF6D` | 16 o | `"AULA-F75 3.0 KB "` | `0xA321` — commande `0x09` |
 | `0xAF7D` | 16 o | `"AULA-F75 5.0 KB "` | `0xA348` — commande `0x09` |
 | `0xAF8D` | 12 o | `20, 10, 5, 2, 2, 2, 2, 2, 2, 2, 2, 2` | `0x808C` et `0x8114` |
+
+> **Portée.** `aula_rf.c` émet les deux noms au démarrage, un par passage de `rf_task()` dès que
+> `P4.7` autorise l'émission — le firmware d'usine, lui, les émet depuis `main` sans se demander si
+> le module écoute. Les seize octets sont recopiés du dump, espace de bourrage compris.
+>
+> **Le slot Bluetooth est désormais persisté**, ce qu'il n'était pas : il retombait à 1 à chaque
+> démarrage. Il va dans `user_settings.rf_link`, libre sur ce clavier — ce champ porte ailleurs
+> l'encodage `rf_mode_t` de l'Air60, mais son unique consommateur, `restore_rf_link()` dans
+> `src/main.c`, est sous `#ifdef RF_ENABLED`, et `RF_ENABLED` et `RF_EUART0` sont mutuellement
+> exclusifs. Aucun champ n'est ajouté à `user_settings_t`, ce qui aurait invalidé les réglages
+> enregistrés des cinq cartes : `nvm.c` compare la longueur stockée et n'a aucune migration.
+>
+> On y range le **slot**, pas le lien : sur le F75 le transport vient du sélecteur matériel, et le
+> slot est la seule chose que le sélecteur ne dit pas.
 
 La table de 12 octets est une **courbe d'accélération à seuil dégressif** :
 

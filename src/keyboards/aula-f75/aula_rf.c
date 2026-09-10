@@ -6,6 +6,7 @@
 #include "usb.h"
 #include "usbhw.h"
 #include "keyboard.h"
+#include "settings.h"
 #include <string.h>
 
 /*
@@ -86,21 +87,23 @@ _Static_assert(FREQ_SYS / 92 > 255000 && FREQ_SYS / 92 < 267000, "FREQ_SYS incom
 #define RF_CMD_REPORT_L 0x02 /* trame longue : 27 o de charge */
 #define RF_CMD_REPORT_S 0x03 /* trame courte : 10 o de charge */
 #define RF_CMD_STATUS   0x06 /* requête d'état -> réponse 02 06 ... */
+#define RF_CMD_NAME     0x09 /* nom Bluetooth, 32 octets */
 #define RF_CMD_SETTINGS 0x0B /* un paramètre ; émis en quittant le sans-fil */
 #define RF_CMD_WIRED    0x0E /* passage en filaire */
 
 /*
  * Non émises ici, mais relevées sur le firmware d'usine : 0x04 (un paramètre,
  * envoyé périodiquement avec la valeur 3), 0x08 (conteneur à sous-commandes :
- * batterie, réglages, relecture de la flash), 0x09 (nom Bluetooth, 32 o), 0x0C
- * (deux paramètres, émis depuis la routine de veille) et 0x0D (pourcentage de
- * batterie). Elles demandent des données que ce portage n'a pas : SMK ne lit
- * pas la tension de batterie sur ce clavier, et aucun nom Bluetooth n'est
- * configurable ici.
+ * batterie, réglages, relecture de la flash), 0x0C (deux paramètres, dont le
+ * déclencheur n'est PAS établi — la feuille de relevé le note « — ») et 0x0D
+ * (renvoi du pourcentage de batterie AU module, qui est celui qui nous l'a
+ * donné). Elles demandent des données que ce portage n'a pas, ou n'ont pas de
+ * déclencheur connu.
  */
 
 /* Longueurs totales, somme de contrôle comprise. */
 #define RF_LEN_SHORT     6
+#define RF_LEN_NAME      32
 #define RF_LEN_REPORT_L  30
 #define RF_LEN_REPORT_S  13
 
@@ -145,6 +148,33 @@ static __bit           link_tx_pending;
 static __xdata uint8_t link_tx_flag;
 
 /*
+ * Annonce des deux noms Bluetooth, une fois par démarrage. Le firmware d'usine
+ * les émet depuis `main`, sans se soucier de savoir si le module écoute ; on les
+ * étale sur deux passages de `rf_task()`, dès que `P4.7` autorise l'émission.
+ *   0 -> nom BT 3.0 à envoyer   1 -> nom BT 5.0 à envoyer   2 -> fait
+ */
+static __xdata uint8_t name_stage;
+
+/* Le slot persisté n'est relisible qu'au premier passage de `rf_task()`. */
+static __bit settings_restored;
+
+/*
+ * PERSISTANCE DU SLOT BLUETOOTH.
+ *
+ * `user_settings.rf_link` est libre sur ce clavier. Ce champ porte ailleurs
+ * l'encodage `rf_mode_t` du NuPhy Air60, mais son unique consommateur,
+ * `restore_rf_link()` dans `src/main.c`, est sous `#ifdef RF_ENABLED` — et
+ * `RF_ENABLED` et `RF_EUART0` sont mutuellement exclusifs (`meson.build`). Sur
+ * le F75 le transport vient du sélecteur matériel, jamais de la NVM, donc rien
+ * ne lit ce champ.
+ *
+ * On y range le SLOT, pas le lien : c'est la seule chose que le sélecteur ne
+ * dit pas et qui, sans ça, retombait à 1 à chaque démarrage. Le nom de l'alias
+ * est là pour que personne ne relise `rf_link` en croyant y trouver un lien.
+ */
+#define AULA_SETTINGS_BT_SLOT user_settings.rf_link
+
+/*
  * Sonde de présence, transcrite de `fcn.00003901` : la commande 0x06 part tous
  * les cent passages et, au bout de TROIS sondes sans réponse, le firmware
  * d'usine relâche la ligne d'émission (`P0CR &= 0xFB ; P0.2 = 1`) et retombe le
@@ -177,17 +207,15 @@ static __bit            probe_answered;
  * la cible d'un point à la fois, et l'index de la table est l'écart divisé par
  * dix. Une décélération : plus on est près de la cible, plus on avance lentement.
  *
- * Les douze octets sont recopiés TELS QUELS depuis le dump. Attention à la
- * notation : la feuille de relevé les liste `20 10 05 02 ...` dans un extrait
- * hexadécimal, mais les commente en prose comme « vingt tics, dix, cinq, deux ».
- * Les deux lectures ne coïncident que sur les deux dernières valeurs. Ce sont
- * des octets de flash dans un listing hexadécimal, et le remplissage à deux
- * chiffres de `05` et `02` le confirme : ce sont bien 0x20, 0x10, 0x05, 0x02,
- * soit 32, 16, 5 et 2 tics. La prose de la feuille de relevé lit l'hexadécimal
- * comme du décimal.
+ * Les douze octets ont été relus DANS LE DUMP, parce que la feuille de relevé
+ * les liste `20 10 05 02 ...` — une notation qui ressemble à de l'hexadécimal
+ * alors qu'elle est décimale. Les octets réels sont
+ * `14 0a 05 02 02 02 02 02 02 02 02 02`, donc bien 20, 10, 5 puis 2 tics :
+ * c'est la PROSE de la feuille de relevé qui était juste, pas la lecture
+ * hexadécimale de son listing.
  */
 static const __code uint8_t batt_damping[12] = {
-    0x20, 0x10, 0x05, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
+    20, 10, 5, 2, 2, 2, 2, 2, 2, 2, 2, 2,
 };
 
 static __xdata uint8_t  batt_frames;  /* compte les trames d'état */
@@ -353,6 +381,42 @@ static bool rf_send_short(uint8_t cmd, uint8_t p0, uint8_t p1)
 static bool rf_send_link(rf_slot_t slot, uint8_t flag)
 {
     return rf_send_short(RF_CMD_LINK, (uint8_t)slot, flag);
+}
+
+/*
+ * Nom Bluetooth — commande 0x09, transcrite de `fcn.0000A307`, émise avec
+ * `r5 = 32` en `0xA376`. Format établi :
+ *
+ *   [0] 0x01   [1] 0x09   [2] profil   [3] 0x10 = 16 (longueur)
+ *   [4..19] seize octets de nom        [31] somme
+ *
+ * Le firmware d'usine l'appelle DEUX FOIS depuis `main` (`0x9148`, `0x914D`),
+ * une par profil, avec deux littéraux de seize caractères complétés par une
+ * espace : `CODE 0xAF6D` = « AULA-F75 3.0 KB » et `CODE 0xAF7D` =
+ * « AULA-F75 5.0 KB ». Le paramètre `[2]` choisit lequel.
+ *
+ * Les noms sont recopiés tels quels du dump, y compris l'espace de bourrage.
+ */
+#define RF_NAME_LEN 16
+static const __code char rf_name_bt3[RF_NAME_LEN] = {
+    'A', 'U', 'L', 'A', '-', 'F', '7', '5', ' ', '3', '.', '0', ' ', 'K', 'B', ' ',
+};
+static const __code char rf_name_bt5[RF_NAME_LEN] = {
+    'A', 'U', 'L', 'A', '-', 'F', '7', '5', ' ', '5', '.', '0', ' ', 'K', 'B', ' ',
+};
+
+static bool rf_send_name(uint8_t profile, const __code char *name)
+{
+    if (!rf_can_send()) {
+        return false;
+    }
+    rf_frame_begin(RF_CMD_NAME);
+    tx_buf[2] = profile;
+    tx_buf[3] = RF_NAME_LEN;
+    for (uint8_t i = 0; i < RF_NAME_LEN; i++) {
+        tx_buf[4 + i] = (uint8_t)name[i];
+    }
+    return rf_send_frame(RF_LEN_NAME);
 }
 
 static rf_slot_t rf_link_slot(void)
@@ -827,6 +891,8 @@ void rf_init(void)
 {
     link_state      = RF_LINK_WIRED;
     bt_slot         = RF_SLOT_BT1;
+    name_stage        = 0;
+    settings_restored = 0;
     link_connected  = 0;
     link_tx_pending = 0;
     probe_ticks     = 0;
@@ -907,13 +973,42 @@ static void rf_probe_task(void)
     (void)rf_send_status_probe();
 }
 
+/*
+ * `rf_init()` est appelée depuis `kb_init()`, donc AVANT `settings_load()` :
+ * elle ne peut pas connaître le slot persisté. C'est la même contrainte
+ * d'ordonnancement qui vaut au NuPhy Air60 un `restore_rf_link()` séparé de son
+ * `rf_init()`. Le premier passage de `rf_task()`, lui, est dans la boucle
+ * principale, donc après. Il tombe aussi AVANT la première vidange de la file
+ * de commandes, et `rf_link_slot()` ne lit le slot qu'au moment d'émettre : la
+ * commande 0x01 déjà mise en attente partira donc avec le bon.
+ */
+static void rf_restore_settings(void)
+{
+    const uint8_t slot = AULA_SETTINGS_BT_SLOT;
+
+    if (slot >= RF_SLOT_BT1 && slot <= RF_SLOT_BT3) {
+        bt_slot = slot;
+    } else {
+        AULA_SETTINGS_BT_SLOT = RF_SLOT_BT1;
+    }
+}
+
 void rf_task(void)
 {
+    if (!settings_restored) {
+        settings_restored = 1;
+        rf_restore_settings();
+    }
+
     rf_rx_consume();
     rf_sample_selector();
 
     if (rf_is_wireless()) {
-        if (link_tx_pending && rf_can_send()) {
+        if (name_stage < 2 && rf_can_send()) {
+            if (rf_send_name(name_stage, (name_stage == 0) ? rf_name_bt3 : rf_name_bt5)) {
+                name_stage++;
+            }
+        } else if (link_tx_pending && rf_can_send()) {
             link_tx_pending = 0;
             (void)rf_send_link(rf_link_slot(), link_tx_flag);
         }
@@ -962,11 +1057,17 @@ void rf_set_bt_slot(uint8_t slot)
         return;
     }
     bt_slot = slot;
+
+    AULA_SETTINGS_BT_SLOT = slot;
+    settings_mark_dirty();
+
     if (link_state == RF_LINK_BT) {
         link_connected = 0;
         rf_queue_link(RF_LINK_SELECT);
     }
 }
+
+
 
 /*
  * Veille. Le firmware d'usine coupe l'EUART0 avant de s'endormir (`fcn.00007D74`
