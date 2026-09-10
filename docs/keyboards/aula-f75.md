@@ -3232,6 +3232,90 @@ efface les bits **`0x44`** et **`0x43`**. Ce sont **exactement les deux bits que
 `0x2D` (`0x1A04`) teste** avant d'appeler `0x8A1A`. Une touche de cette voie conditionne donc le
 travail par trame de cet effet — deux tables décodées séparément qui se referment l'une sur l'autre.
 
+#### Les trois dernières tables de sauts — `0x391C`, `0x0495`, `0x5817`
+
+L'inventaire annonçait trois tables « hors du chemin de l'appui de touche, non décodées ». Elles le
+sont maintenant, et elles se tiennent : **l'une est le séquenceur de transfert, les deux autres sont
+le pendant USB du conteneur `0x08` radio**.
+
+##### `0x391C` — le séquenceur, dix handlers
+
+`FUN_CODE_3901`, appelée par `euart0_parse`, branche sur `[0x0D9E] - 1`, borné à 10 :
+
+| Handler | Arm | État |
+| --- | --- | --- |
+| 1 – 7 | `0x393A`, `0x3975`, `0x3A25`, `0x3AB5`, `0x3BA7`, `0x3C42`, `0x3CD0` | déjà décrits plus haut |
+| **8**, **9** | `0x3D25` | **la queue commune — ils n'existent pas** |
+| **10** | `0x3D1D` | `[0x0D9E] = 0` puis `lcall 0xB093` : **fin de transfert explicite** |
+
+Le point ouvert « handlers 8, 9 et 10 du séquenceur » est donc réglé : deux d'entre eux ne sont pas
+des handlers du tout — la table les fait tomber sur la même adresse que le hors-borne — et le
+troisième est la clôture, qui désarme le séquenceur et émet une dernière trame `0x08`.
+
+> Nuance sur l'opcode `0x4A`. Cette page se demandait s'il n'était pas la fin de transfert. C'est
+> moins probable maintenant qu'un handler dédié à la clôture est identifié. La question reste
+> ouverte, mais sur une base différente.
+
+##### D'où vient `IDATA[0x77]` — le chemin USB
+
+Les deux tables suivantes branchent sur `IDATA[0x77]`, que six sites **lisent** et qu'aucun idiome
+direct n'écrit. Le décompilateur tranche : `FUN_CODE_0200` — appelée par `FUN_CODE_9926`, elle-même
+appelée par **`isr_usb`** — recopie le tampon d'endpoint `XDATA 0x1100` vers `IDATA` **à partir de
+`0x76`**. `IDATA[0x77]` est donc **l'octet de commande d'un rapport reçu sur EP0**, et `IDATA[0x78]`
+le suivant.
+
+C'est la voie logicielle du clavier — celle par laquelle OpenRGB parle à l'appareil.
+
+##### `0x0495` — les huit commandes d'ÉCRITURE
+
+Index = `IDATA[0x77] - 3`, clés **3 à 10**. La valeur `0xAA` est captée avant la table, en `0x0473`.
+
+| Clé | Arm | Effet |
+| --- | --- | --- |
+| `3` | `0x04AD` | base `CODE` selon `[0x038D]` — `0xCC00`, `0xD000`, `0xD400`, `0xD800` — puis `0xEE4E` |
+| `4` | `0x04DF` | `0xEEF4` : effacement + écriture de la **page 99** (`0xC600`) |
+| `5` | `0x04E5` | `0xDC00` + séquence × 512, puis `0xEE4E` |
+| `6` | `0x0505` | `0xCA00` + séquence × 512, recopie du tampon, puis `0xEE4E` |
+| **`7`** | `0x05E9` | **rien** — même adresse que le hors-borne |
+| `8` | `0x056E` | en filaire : pose deux bits et remet `[0x0D9F:0x0DA0]` à zéro |
+| **`9`** | `0x05E9` | **rien** |
+| `10` | `0x0584` | `0xC800` + séquence × 512, puis `0xEE4E` |
+| `0xAA` | `0x05A8` | `[0x08C0] = IDATA[0x77]`, `[0x08C1] = IDATA[0x78]`, `[0x08C2] = 0` — un **écho** |
+
+##### `0x5817` — les neuf commandes de LECTURE
+
+Index = `IDATA[0x77] - 0x82`, clés **`0x82` à `0x8A`**. Chaque arm charge un pointeur source dans
+`[0x0F45:0x0F46]`, reprend la longueur de `[0x038E:0x038F]` dans `[0x0F3A:0x0F3B]`, pose
+`[0x0F4D] = 1` et arme **EP0** (`EP0CON |= 4`). La réponse part donc par le point de terminaison de
+contrôle, pas par un canal d'interruption.
+
+| Clé | Arm | Source |
+| --- | --- | --- |
+| `0x82` | `0x5832` | gabarit `CODE 0xB3E3` ou `0xB3FC` selon `[0x038D]` |
+| `0x83` | `0x5852` | `0xCC00` / `0xD000` / `0xD400` / `0xD800` + séquence × 512 — les **quatre profils de remap** |
+| `0x84` | `0x58AA` | `0xC600` + séquence × 512 — le **bloc de réglages** |
+| `0x85` | `0x58BB` | `0xDC00` + séquence × 512 |
+| `0x86` | `0x58CB` | `0xCA00` + séquence × 512 — l'**éclairage par touche** |
+| `0x87` | `0x58DB` | deux octets de **statut** construits en RAM (`[0x0095]`, `[0x0096]`) |
+| `0x88` | `0x591A` | `(séquence × 2 + 1) << 8 \| 0x52` — soit `0x0152` à la séquence 0 |
+| `0x89` | `0x5949` | la queue commune seule : arme EP0 sans changer la source |
+| `0x8A` | `0x592F` | `0xC800` + séquence × 512 |
+
+##### Ce que ces deux tables établissent
+
+**Les bases sont exactement celles du conteneur `0x08` reçu par la radio** — `0xC600`, `0xC800`,
+`0xCA00`, `0xCC00`/`0xD000`/`0xD400`/`0xD800`, `0xDC00` — avec le même découpage par numéro de
+séquence et le même graveur `0xEE4E` → `0xAAC1`.
+
+Le clavier expose donc **la même configuration par deux transports**, avec deux jeux de codes
+distincts : `0x01`–`0x09` et `0x41`–`0x4A` côté radio, `3`–`10` (écriture) et `0x82`–`0x8A` (lecture)
+côté USB. Ce n'est pas une redondance de lecture : ce sont deux chemins physiques différents,
+décodés séparément, qui aboutissent aux mêmes pages de flash.
+
+Et les deux tables ont chacune leurs trous — clés `7` et `9` de `0x0495`, handlers `8` et `9` de
+`0x391C` — qui tombent sur l'adresse du hors-borne. Le firmware réserve des codes qu'il n'implémente
+pas.
+
 #### La table `0x865E` — les treize actions souris
 
 `b0 = 1` mène en `0x85FB`, qui sépare l'appui du relâchement sur le bit `0x42`, puis, à l'appui,
