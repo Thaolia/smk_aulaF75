@@ -2525,6 +2525,45 @@ choisi, `0x0896` est ce qui doit réellement s'afficher une fois passées les po
 l'interrupteur de rétroéclairage. Ce n'était pas une variable orpheline, c'était le verrou de sortie
 d'un comparateur.
 
+##### `0x0897`, l'autre moitié du verrou
+
+Le comparateur teste **une paire**, pas une valeur : `cjne a,r7` en `0x16B9`, et `R7` vient de
+`0x1619` — `mov dptr,#0x011C ; movx a,@dptr ; mov r7,a`. `0x011C` est le **mode couleur** (celui que
+`0x1D2B` force à 7 pour le tirage aléatoire, et que `0x5108` consulte). `R7` survit intact jusqu'au
+comparateur.
+
+Donc `0x0897` est la **copie verrouillée du mode couleur**, et le verrou porte sur le couple
+*(effet, mode couleur)*. C'est cohérent : changer de mode couleur demande le même ressemis et le même
+effacement que changer d'effet. Les moteurs, eux, lisent le mode courant en `0x011C` directement —
+`0x0897` ne sert qu'à détecter le changement.
+
+##### `0x26` et `0x2D` ne sont pas des effets, ce sont des états transitoires
+
+Trois raccourcis posent une valeur littérale dans `0x009D` : `0x20`, `0x26` et `0x2D`. Les deux
+derniers sont **symétriques**, et ils sauvegardent d'abord :
+
+| Site | Ce qu'il fait |
+| --- | --- |
+| `0x9184` | `[0x0E24] = effet courant` puis `[0x009D] = 0x26` |
+| `0xA48B` | `[0x0E24] = effet courant` puis `[0x009D] = 0x2D` — et seulement si l'effet courant vaut `0x20` (`cjne a,#0x20` en `0xA47E`) |
+| `0x1D40` | `[0x009D] = [0x0E24]` — la restauration, dans le gestionnaire de `0x26` |
+| `0xAFB8` | `[0x009D] = [0x0E24]` — la seconde restauration, précédée d'un test `cjne a,#0x20` sur la valeur sauvegardée |
+
+**`0x26` est une animation de transition.** Son gestionnaire `0x1D37` lit `XRAM 0x0ECD` — le sens
+vertical du serpent — et **dès qu'il repasse à zéro**, c'est-à-dire quand le balayage a fini de
+parcourir la grille, il efface le panneau, restaure `[0x0E24]` et repose le drapeau de rechargement.
+L'usine s'en sert comme d'un habillage de changement de mode, pas comme d'un effet qu'on choisit.
+
+**`0x2D` ne rend rien du tout.** L'aiguillage ne teste que `0x20` et `0x26` avant sa borne
+`cjne a,#0x12` ; `0x2D` la dépasse et tombe sur `0x1DC2`, un `ret`. Sa ligne de palette est
+d'ailleurs entièrement noire. C'est un état où le moteur d'animation se tait délibérément, entré
+depuis le mode gaming et restauré par `0xAFB8`.
+
+**Conséquence pour le portage** : `AULA_FX_SNAKE_RGB` reste un effet permanent chez nous. Son rendu
+est transcrit, mais sa **durée** est notre choix — SMK n'a pas de notion d'effet transitoire et notre
+liste se parcourt à la touche. C'est écrit dans `indicators.c`. Quant à `0x2D`, il n'a pas de
+contrepartie et n'en a pas besoin : ne rien afficher, c'est `AULA_FX_OFF`.
+
 ##### Ce que ça change pour le portage : rien, et c'est en soi un résultat
 
 Le portage recalcule à chaque passage depuis `user_settings.led_effect`, et `fx_reset()` — appelé à

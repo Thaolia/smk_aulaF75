@@ -83,7 +83,7 @@ static const __code uint8_t led_speeds[] = {1, 2, 4, 8, 16};
 #define AULA_FX_RAIN      ((uint8_t)(FX_COUNT + 1)) /*  5  0x9B2B */
 #define AULA_FX_TWINKLE   ((uint8_t)(FX_COUNT + 2)) /*  6  0xAC1C -> 0x4EA9 */
 #define AULA_FX_SNAKE     ((uint8_t)(FX_COUNT + 3)) /*  7  0x8DDF */
-#define AULA_FX_SNAKE_RGB ((uint8_t)(FX_COUNT + 4)) /*  8  0x1D05, effet 0x26 */
+#define AULA_FX_SNAKE_RGB ((uint8_t)(FX_COUNT + 4)) /*  8  0x1D05, effet 0x26 -- adapté */
 #define AULA_FX_RIPPLE    ((uint8_t)(FX_COUNT + 5)) /*  9  0x746A / 0x1D8D */
 #define AULA_FX_KEYWAVE   ((uint8_t)(FX_COUNT + 6)) /* 10  0x82A5 */
 #define AULA_FX_VRAINBOW  ((uint8_t)(FX_COUNT + 7)) /* 11  0x9659 */
@@ -108,6 +108,17 @@ static const __code uint8_t led_speeds[] = {1, 2, 4, 8, 16};
  *
  * Les trois derniers n'ont pas d'état : ce sont des fonctions pures de la
  * position et de la phase.
+ *
+ * UNE ADAPTATION ASSUMÉE, SNAKE_RGB. Chez l'usine, l'effet 0x26 n'est pas un
+ * effet permanent mais une TRANSITION : 0x9184 sauvegarde l'effet courant en
+ * XRAM 0x0E24 avant de poser 0x26, et le gestionnaire 0x1D37 restaure cette
+ * sauvegarde dès que le sens vertical du serpent repasse à zéro, c'est-à-dire
+ * quand le balayage a fini de parcourir la grille. L'usine s'en sert comme d'un
+ * habillage de changement de mode.
+ *
+ * SMK n'a pas de notion d'effet transitoire et notre liste se parcourt à la
+ * touche, donc on le garde permanent. Le rendu est transcrit ; c'est sa DURÉE
+ * qui est notre choix.
  */
 
 /*
