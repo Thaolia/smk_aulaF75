@@ -753,6 +753,19 @@ Le portage transpose la table une fois pour toutes à la compilation (`aula_fx_k
 pour les colonnes utiles) et calcule `phase_de_la_touche + compteur de trames` — strictement
 équivalent à l'avance d'un cran par trame et par touche que fait `0xEDA2`, sans aucun état à tenir.
 
+Deux détails qui comptent pour le rendu :
+
+- **Le transposeur est appelé par effet, pas une fois pour toutes.** `0x1AA8` est précédé d'un
+  `JNB 0x21` et suivi de branches sœurs en `0x1AB2`, `0x1AC4` et `0x1AD0` qui appellent `0xEFBE` et
+  `0xEF85` avec le même prologue : c'est un aiguillage, une branche par effet, chacune ressemant son
+  propre plan. Le champ repart donc du dump **à chaque sélection** de l'effet. Le portage remet la
+  phase à zéro dans `fx_reset()` pour la même raison.
+- **La couture entre la colonne 14 et la colonne 0 est normale.** Le balayage se referme sur lui-même
+  dans l'espace de 21 colonnes grâce aux six colonnes 15–20 (`51 51`, `4f 4f`, `4d 4d`…), qui
+  n'existent pas sur ce clavier. Sur quinze colonnes, la phase saute de `0x03`–`0x13` à `0x52`–`0x44`
+  au bouclage — et le firmware d'usine fait exactement le même saut sur exactement ce matériel. Ce
+  n'est pas un artefact de portage.
+
 **L'effet 15 est donc entièrement transcrit.** L'approximation diagonale que le portage assumait est
 retirée.
 

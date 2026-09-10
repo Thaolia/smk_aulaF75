@@ -131,6 +131,13 @@ uint8_t aula_fx_gaming(uint8_t col)
  * Rangé ici en [colonne][ligne] -- l'usine le range en [ligne][colonne] avec un
  * pas de 21, et 0xACA3 le transpose au chargement. On transpose une fois pour
  * toutes, à la compilation.
+ *
+ * LA COUTURE ENTRE LA COLONNE 14 ET LA COLONNE 0 EST NORMALE, ne pas la
+ * « corriger ». Le balayage angulaire se referme sur lui-même dans l'espace de
+ * 21 colonnes du firmware d'usine, grâce aux six colonnes 15 à 20 (51 51, 4f 4f,
+ * 4d 4d ...) qui n'existent pas sur ce clavier. Sur quinze colonnes, la phase
+ * saute de 0x03-0x13 à 0x52-0x44 au bouclage -- et le firmware d'usine fait
+ * exactement le même saut sur ce même matériel.
  */
 static const __code uint8_t keywave[AULA_FX_COLS][AULA_FX_ROWS] = {
     {0x52, 0x50, 0x4d, 0x48, 0x45, 0x44}, /* colonne  0 */

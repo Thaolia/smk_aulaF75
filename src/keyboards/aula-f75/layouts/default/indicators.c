@@ -312,12 +312,21 @@ static void fx_reset(void)
     for (col = 0; col < LED_COLS; col++) {
         rain_row[col] = 0xff;
     }
-    snake_col   = 0;
-    snake_row   = 0;
+    snake_col    = 0;
+    snake_row    = 0;
     snake_right  = 1;
     snake_down   = 1;
     ripple_ring  = 0;
     fx_frame_div = 0;
+
+    /*
+     * La phase repart de zéro, comme en usine. L'aiguillage de 0x1AA8 ressème
+     * le plan de l'effet choisi À CHAQUE sélection -- une branche par effet, la
+     * nôtre appelant le transposeur 0xACA3. Sans cette ligne, revenir sur la
+     * vague la reprendrait là où un autre effet a laissé le compteur commun,
+     * au lieu de repartir du champ de phase d'usine.
+     */
+    led_phase = 0;
 }
 
 static void fx_frame_advance(void)
