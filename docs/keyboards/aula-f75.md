@@ -199,22 +199,68 @@ mesure son budget — *« one effect evaluation per subframe: six, one per row, 
 starves the USB interrupt »*. Le portage reprend sa structure, une seule évaluation d'effet par
 sous-trame, en remplaçant son tramage de trames entières par du vrai PWM.
 
-#### Ce qui reste non vérifiable : la polarité
+#### La polarité, tranchée sur le dump
 
-L'arithmétique de conversion du firmware d'usine n'est **pas** localisée — rien ne relie son tampon
-de 8 bits par canal en `0x0152` aux 36 octets par colonne que `fcn @ 0x6E61` lit en `0x05A2`, et sa
-valeur de `DUTY1` est inconnue. Deux lectures restent cohérentes :
+Cette section posait la polarité comme indécidable et le portage la concentrait dans une constante
+`AULA_RGB_DUTY_INVERTED`. **La question était décidable, et la réponse est l'inverse de celle qui
+avait été retenue.** Trois relevés indépendants la verrouillent.
 
-| | Rapport cyclique | `DUTY1` | Précédent dans SMK |
+**1. `DUTY1` est écrit, une seule fois, et vaut une constante par canal.** Sur les 36 références aux
+registres `DUTY1` de l'image entière (`PWMnnDUTY1H` en `0xFFB8`–`0xFFC9`, `DUTY1L` en
+`0xFFA0`–`0xFFB1`), **les 36 sont dans la routine d'init `0x6713`–`0x68CD`, et zéro ailleurs**. Le
+chargeur de colonne ne module que `DUTY2`. Les 18 valeurs :
+
+| Banc | Canaux | `DUTY1H` | `DUTY1L` |
 | --- | --- | --- | --- |
-| Inversé | `PERIOD − v×PERIOD/255` | `PERIOD` | eyooso-z11 |
-| Direct | `v×PERIOD/255` | `0` | NuPhy Air60 (« Do NOT invert ») |
+| PWM0 | `PWM00`…`PWM05` | `0x00` | `C3 C4 C5 C0 C1 C2` |
+| PWM1 | `PWM10`…`PWM15` | `0x00` | `BA BB BC BD BE BF` |
+| PWM2 | `PWM20`…`PWM25` | `0x00` | `B4 B5 B6 B7 B8 B9` |
 
-Un indice de chaque côté : la présente page conclut « anode commune, le PWM fait office de sink »,
-ce qui va vers l'inversion ; mais `user_matrix_sinks_off()` du portage tire les 18 broches **au
-niveau bas** pour éteindre, ce qui va vers le sens direct. Le portage retient l'inversion et
-concentre le choix dans **une seule constante**, `AULA_RGB_DUTY_INVERTED` (`aula_rgb.h`) : si le
-rétroéclairage s'allume à l'envers, c'est la seule ligne à changer.
+Ni `0`, ni `0x04B0` : dix-huit valeurs consécutives `0xB4`–`0xC5`, une par canal.
+
+**2. La même table existe en flash, et sa permutation est celle du chargeur.** `CODE 0x2922` tient
+18 octets, `0xB4 + indice`, indexés `ligne × 3 + couleur`. Trié, cet ensemble est **exactement**
+celui des `DUTY1` ci-dessus ; la permutation entre les deux est **exactement** l'ordre de chargement
+de `fcn @ 0x6E61` (`buf[0..5]→PWM20..25`, `[6..11]→PWM10..15`, `[12..14]→PWM03..05`,
+`[15..17]→PWM00..02`). Ce recoupement confirme au passage la correspondance canal ↔ (ligne, couleur)
+et la rotation du groupe P3, jusque-là déduites de l'ordre du driver OpenRGB.
+
+**3. La conversion 8 → 16 bits — l'ancien « seul vrai trou » — est en `0x765B`–`0x770C`.** Une seule
+fonction touche les deux bases : elle écrit le framebuffer 8 bits (`0x0152 + colonne × 18 +
+ligne × 3 + couleur`) puis, en écriture directe, le tampon 16 bits (`0x05A2 + colonne × 36 +
+ligne × 6`, **gros-boutiste**). Son arithmétique, en `0x76C3` :
+
+```
+76C3  mov  a,r3           ; la valeur 8 bits
+76C4  mov  b,#0x04
+76C7  mul  ab             ; r6:r7 = v x 4
+76CB  mov  a,r5           ; la ligne
+76CC  mov  b,#0x03
+76CF  mul  ab
+76D0  add  a,#0x22        ; dptr = 0x2922 + ligne x 3
+76D5  addc a,#0x29
+76DA  movc a,@a+dptr      ; la phase du canal
+76DD  add  a,r7           ; r6:r7 += phase   (addition 16 bits)
+```
+
+Soit :
+
+> **`DUTY2 = (valeur << 2) + phase[ligne × 3 + couleur]`**, avec `DUTY1` figé sur cette même phase.
+
+**Conséquence.** L'impulsion s'étend de `DUTY1` à `DUTY2`, donc sa largeur vaut `valeur << 2` : le
+rapport cyclique est **direct**, 0 = éteint (impulsion nulle, `DUTY2 = DUTY1`), 255 = 1020/1200 soit
+85 % de la période. Le décalage de phase, un cran par canal, étale les fronts montants des 18 voies
+au lieu de les faire coïncider ; il disparaît du résultat lumineux.
+
+L'indice qui allait vers le sens direct — `user_matrix_sinks_off()` tire les 18 broches au niveau
+bas — était donc le bon, et la conclusion « anode commune, le PWM fait office de sink » de cette
+page était fausse. `AULA_RGB_DUTY_INVERTED` a disparu du portage : il n'y a plus de choix à faire.
+
+**Un seul écart assumé avec l'usine : l'écrêtage.** À valeur 255 la somme vaut jusqu'à
+`1020 + 197 = 1217`, soit 17 crans au-delà de la période. L'usine ne l'écrête pas ; le portage si,
+parce que `led_effect_rgb()` produit bel et bien 255 et qu'un `DUTY2` supérieur à la période n'a pas
+de comportement défini par le datasheet. L'écrêtage ne mord qu'à partir de la valeur 251, et
+seulement sur les trois canaux de la ligne 5.
 
 ### Ce qui est établi côté PWM
 
@@ -227,8 +273,9 @@ rétroéclairage s'allume à l'envers, c'est la seule ligne à changer.
   (`PWM0PERDL=0xB0`). Le portage `tiagoluizo` reprogramme la sienne à `0x0400` = 1024 et calcule
   ses rapports cycliques en conséquence (`0x0400 - (v << 2)`) — cohérent chez lui, mais **ce n'est
   pas la valeur d'usine**.
-- Rapport cyclique **inversé** : 0 = éteint, 255 ≈ plein. Les LED sont donc à anode commune, le PWM
-  fait office de sink.
+- Rapport cyclique **direct** : `DUTY2 = (v << 2) + phase`, `DUTY1` = phase, donc largeur
+  d'impulsion `v << 2` — 0 = éteint, 255 = 85 % de la période. Établi sur le dump (voir ci-dessus) ;
+  une rédaction antérieure de cette page concluait « inversé », c'était faux.
 - `PWM00CON` d'usine = `0x89` (`0x68D3`) = `PWM_MODE_ENABLE | PWM_SS | diviseur 1`.
 
 ## `fcn.0000AF99` — publication de l'effet RGB, protégée contre l'USB

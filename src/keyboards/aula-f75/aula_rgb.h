@@ -26,28 +26,40 @@
 #define AULA_RGB_PERIOD 0x04B0u
 
 /*
- * POLARITÉ -- le seul paramètre de ce module qui ne se tranche pas sur le dump.
+ * POLARITÉ ET DÉCALAGE DE PHASE -- ÉTABLIS SUR LE DUMP, plus rien d'inféré ici.
  *
- * À 1 : rapport cyclique inversé, DUTY1 = période. C'est la lecture retenue par
- * la feuille de relevé (« LED à anode commune, le PWM fait office de sink »),
- * et c'est aussi ce que fait l'eyooso-z11 de SMK, qui associe
- * `LED_DUTY(v) = PERIOD - (v << 2)` à `PWM_DUTY1 = PWM_PERD`.
+ * Le firmware d'usine écrit DUTY1 UNE SEULE FOIS, à l'initialisation
+ * (0x6713-0x68CD), et ne le retouche jamais : sur les 36 références aux
+ * registres DUTY1 de l'image entière, les 36 sont dans cette routine, et zéro
+ * ailleurs. Seul DUTY2 est modulé, par le chargeur de colonne 0x6E61.
  *
- * À 0 : rapport cyclique direct, DUTY1 = 0. C'est la convention du NuPhy Air60,
- * dont le commentaire avertit « Do NOT invert » -- pour SON câblage.
+ * Et DUTY1 ne vaut ni 0 ni la période : c'est une constante PAR CANAL, prise
+ * dans CODE 0x2922 (18 octets, `0xB4 + indice`, indexés `ligne * 3 + couleur`).
+ * Les 18 valeurs relevées à l'init sont exactement cette table, permutée par
+ * l'ordre de chargement de 0x6E61 -- les deux relevés se recoupent octet à
+ * octet, ce qui verrouille aussi la correspondance canal <-> (ligne, couleur).
  *
- * Les deux sont cohérentes en interne ; seule la carte peut dire laquelle est
- * la bonne, et le firmware d'usine ne le dit pas : ni sa valeur de DUTY1 ni son
- * arithmétique de conversion n'ont été localisées. Si le rétroéclairage
- * s'allume à l'envers, c'est ici que ça se change, et nulle part ailleurs.
+ * Le convertisseur 0x76C3 donne l'arithmétique en clair :
+ *
+ *     DUTY2 = (valeur << 2) + phase[ligne * 3 + couleur]
+ *
+ * (`MOV B,#4 / MUL AB` puis addition 16 bits de l'octet de table), rangée en
+ * GROS-BOUTISTE dans le tampon 0x05A2 + colonne * 36 que le chargeur recopie.
+ *
+ * D'où la sémantique réelle : l'impulsion s'étend de DUTY1 à DUTY2, donc sa
+ * largeur vaut `valeur << 2` et le décalage de phase disparaît du résultat
+ * lumineux. Le rapport cyclique est DIRECT -- 0 = éteint (DUTY2 = DUTY1,
+ * impulsion nulle), 255 = 1020/1200 soit 85 % de la période.
+ *
+ * La rédaction précédente posait `AULA_RGB_DUTY_INVERTED 1` avec DUTY1 = période
+ * et `duty = période - valeur * 4,6875`. C'était l'exact contraire : le panneau
+ * aurait été allumé à fond au repos et noir à luminosité maximale.
+ *
+ * Les 18 phases sont décalées d'un cran chacune ; l'usine étale ainsi les
+ * fronts montants des 18 canaux au lieu de les faire coïncider.
  */
-#define AULA_RGB_DUTY_INVERTED 1
-
-#if AULA_RGB_DUTY_INVERTED
-#    define AULA_RGB_DUTY1 AULA_RGB_PERIOD
-#else
-#    define AULA_RGB_DUTY1 0u
-#endif
+#define AULA_RGB_PHASE_BASE 0xB4u
+#define AULA_RGB_PHASE(channel) (uint16_t)(AULA_RGB_PHASE_BASE + (channel))
 
 /* Roue de teintes d'usine (CODE 0x2B2A), 192 entrées. */
 #define AULA_RGB_WHEEL_SIZE 192
@@ -56,7 +68,7 @@ void aula_rgb_wheel(uint8_t index, uint8_t out[3]);
 /* Éteint tout le framebuffer. */
 void     aula_rgb_clear(void);
 void     aula_rgb_set(uint8_t row, uint8_t col, uint8_t red, uint8_t green, uint8_t blue);
-uint16_t aula_rgb_duty(uint8_t value);
+uint16_t aula_rgb_duty(uint8_t channel, uint8_t value);
 
 /* Charge les 18 rapports cycliques de la colonne dans les registres PWM,
  * dans l'ordre relevé dans le firmware d'usine. */

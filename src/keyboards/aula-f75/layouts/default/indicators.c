@@ -3,6 +3,7 @@
 #include "pwm.h"
 #include "kbdef.h"
 #include "settings.h"
+#include "tick.h"
 #include "led_effect.h"
 #include "user_matrix.h"
 #include "aula_rgb.h"
@@ -90,6 +91,25 @@ static __xdata uint8_t react_hue[LED_COLS][LED_ROWS];
 static __xdata uint8_t react_val[LED_COLS][LED_ROWS];
 static __xdata uint8_t react_prev[LED_COLS];
 
+/*
+ * À purger en même temps que le framebuffer sur un changement d'effet : sinon
+ * on revient dans le mode réactif avec des touches qui finissent de s'éteindre
+ * depuis la dernière fois, et un bit resté dans `react_prev` avale le premier
+ * appui réel d'une touche qui était enfoncée à la sortie du mode.
+ */
+static void react_reset(void)
+{
+    uint8_t col;
+    uint8_t row;
+
+    for (col = 0; col < LED_COLS; col++) {
+        react_prev[col] = 0;
+        for (row = 0; row < LED_ROWS; row++) {
+            react_val[col][row] = 0;
+        }
+    }
+}
+
 #define LED_BRIGHTNESS_DEFAULT (LED_BRIGHTNESS_LEVELS - 1)
 #define LED_SPEED_DEFAULT      2
 
@@ -140,6 +160,29 @@ void indicators_pwm_enable(void)
  * `settings_save_pre()` autour de l'effacement de page flash. Les trois veulent
  * la même chose : que le panneau soit noir et les colonnes libres.
  */
+/*
+ * L'écriture des réglages efface une page de flash, et cet effacement tourne
+ * interruptions coupées pendant ~5 ms. Sans ces deux crochets, `tick_dispatch`
+ * reste gelé pendant ce temps avec la colonne de la dernière sous-trame TOUJOURS
+ * sélectionnée et les trois bancs PWM actifs : cette colonne conduirait 5 ms au
+ * lieu de 400 µs, soit une douzaine de fois son rapport cyclique nominal.
+ *
+ * Et ce n'est pas un cas rare : chaque changement d'effet, de luminosité, de
+ * vitesse ou de slot Bluetooth appelle `settings_mark_dirty()`. Même remède que
+ * le NuPhy Air60, pour la même raison.
+ */
+void settings_save_pre(void)
+{
+    tick_pause();
+    indicators_pwm_disable();
+}
+
+void settings_save_post(void)
+{
+    indicators_pwm_enable();
+    tick_resume();
+}
+
 void indicators_pwm_disable(void)
 {
     PWM00CON = PWM_CON_PARKED;
@@ -297,6 +340,7 @@ void indicators_init(void)
     regen_row = 0;
     regen_col = 0;
 
+    react_reset();
     aula_rgb_clear();
 }
 
@@ -313,6 +357,7 @@ void indicators_next_effect(void)
         user_settings.led_effect = 0;
     }
     aula_rgb_clear(); /* l'effet précédent laisserait ses pixels derrière lui */
+    react_reset();
     settings_mark_dirty();
 }
 
@@ -324,6 +369,7 @@ void indicators_prev_effect(void)
         user_settings.led_effect--;
     }
     aula_rgb_clear();
+    react_reset();
     settings_mark_dirty();
 }
 

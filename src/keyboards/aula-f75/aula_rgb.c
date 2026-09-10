@@ -57,35 +57,26 @@
 static AULA_RGB_XDATA uint16_t duty_cache[AULA_RGB_COLS][AULA_RGB_CHANNELS];
 
 /*
- * Rapport cyclique INVERSÉ : 0 = éteint (duty = période), 255 = pleine
- * intensité (duty ≈ 0). Les LED sont à anode commune et le PWM fait office de
- * sink -- c'est l'inverse de la convention du NuPhy Air60, dont le commentaire
- * dit « Do NOT invert » pour son propre câblage.
+ * Conversion 8 bits -> 16 bits, transcrite du convertisseur d'usine 0x76C3 :
  *
- * INFÉRÉ, et c'est le seul vrai trou de ce module : l'arithmétique d'inversion
- * du firmware d'usine n'est PAS localisée. Le document a bien la période
- * (0x04B0) et le sens, mais rien ne relie son tampon 8 bits par canal (0x0152)
- * aux 36 octets par colonne que le chargeur lit en 0x05A2, et aucune routine de
- * conversion n'a été isolée.
+ *     DUTY2 = (valeur << 2) + phase du canal
  *
- * D'où ce choix, qui est le nôtre : `value * 75 >> 4` vaut `value * 4,6875`,
- * soit 1195 au maximum -- 5 de moins que la période, une erreur de 0,4 %. Le
- * produit tient dans 16 bits, et c'est une multiplication suivie d'un décalage.
+ * L'impulsion PWM s'étend de DUTY1 à DUTY2 et DUTY1 reste figé sur la phase du
+ * canal (voir `aula_rgb.h`), donc la largeur utile vaut exactement `valeur << 2`
+ * et la phase ne fait que décaler le front dans la période.
  *
- * La rédaction précédente écrivait `value * (PERIOD / 255)` : `1200 / 255` vaut
- * QUATRE en division entière, donc l'intensité maximale donnait un rapport de
- * 180 au lieu de 0 -- le blanc plein était inatteignable et toute la plage
- * était comprimée dans [180, 1200].
+ * ÉCART ASSUMÉ AVEC L'USINE -- l'écrêtage. À valeur 255, la somme vaut
+ * 1020 + phase, soit jusqu'à 1217 pour la phase la plus haute (0xC5), donc
+ * 17 crans AU-DELÀ de la période de 1200. L'usine ne l'écrête pas ; nous si,
+ * parce que `led_effect_rgb()` produit bel et bien 255 et qu'un DUTY2 supérieur
+ * à la période n'a pas de comportement défini par le datasheet. L'écrêtage ne
+ * mord qu'à partir de la valeur 251 et sur les trois canaux de la ligne 5.
  */
-uint16_t aula_rgb_duty(uint8_t value)
+uint16_t aula_rgb_duty(uint8_t channel, uint8_t value)
 {
-    const uint16_t scaled = (uint16_t)(((uint16_t)value * 75u) >> 4);
+    const uint16_t duty = (uint16_t)(((uint16_t)value << 2) + AULA_RGB_PHASE(channel));
 
-#if AULA_RGB_DUTY_INVERTED
-    return (uint16_t)(AULA_RGB_PERIOD - scaled);
-#else
-    return scaled;
-#endif
+    return (duty > AULA_RGB_PERIOD) ? AULA_RGB_PERIOD : duty;
 }
 
 
@@ -182,11 +173,10 @@ void aula_rgb_clear(void)
 {
     uint8_t col;
     uint8_t ch;
-    const uint16_t off = aula_rgb_duty(0);
-
     for (col = 0; col < AULA_RGB_COLS; col++) {
         for (ch = 0; ch < AULA_RGB_CHANNELS; ch++) {
-            duty_cache[col][ch] = off;
+            /* éteint = impulsion nulle = DUTY2 ramené sur la phase du canal */
+            duty_cache[col][ch] = AULA_RGB_PHASE(ch);
         }
     }
 }
@@ -196,9 +186,11 @@ void aula_rgb_set(uint8_t row, uint8_t col, uint8_t red, uint8_t green, uint8_t 
     if (row >= AULA_RGB_ROWS || col >= AULA_RGB_COLS) {
         return;
     }
-    duty_cache[col][row * AULA_RGB_COLORS + 0] = aula_rgb_duty(red);
-    duty_cache[col][row * AULA_RGB_COLORS + 1] = aula_rgb_duty(green);
-    duty_cache[col][row * AULA_RGB_COLORS + 2] = aula_rgb_duty(blue);
+    const uint8_t base = (uint8_t)(row * AULA_RGB_COLORS);
+
+    duty_cache[col][base + 0] = aula_rgb_duty((uint8_t)(base + 0), red);
+    duty_cache[col][base + 1] = aula_rgb_duty((uint8_t)(base + 1), green);
+    duty_cache[col][base + 2] = aula_rgb_duty((uint8_t)(base + 2), blue);
 }
 
 /*

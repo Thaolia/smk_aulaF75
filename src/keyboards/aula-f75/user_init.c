@@ -49,8 +49,8 @@ void user_gpio_init(void)
 
 /*
  * Les 18 canaux du rétroéclairage : trois bancs de six, période et DUTY1
- * communs. La période 0x04B0 est celle du firmware d'usine (PWM0PERDH/L lus en
- * 0x6707 et 0x670D) ; DUTY1 suit la polarité choisie dans `aula_rgb.h`.
+ * communs. La période 0x04B0 et les dix-huit constantes DUTY1 sont celles du
+ * firmware d'usine, relevées dans sa routine 0x6707-0x68D3.
  *
  * Les bancs ne sont PAS activés ici : c'est `indicators_pwm_enable()` qui pose
  * `PWM_MODE_ENABLE`, et `indicators_pwm_disable()` qui le retire avant chaque
@@ -69,25 +69,30 @@ void user_pwm_init(void)
     PWM2PERDH = perdh;
     PWM2PERDL = perdl;
 
-    /* DUTY2 part sur « éteint », qui vaut aula_rgb_duty(0). */
-    SET_PWM_DUTY(PWM00, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM01, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM02, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM03, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM04, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM05, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM10, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM11, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM12, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM13, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM14, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM15, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM20, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM21, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM22, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM23, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM24, AULA_RGB_DUTY1, aula_rgb_duty(0));
-    SET_PWM_DUTY(PWM25, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    /*
+     * DUTY1 = la phase du canal, écrite ici et JAMAIS retouchée ensuite --
+     * c'est très exactement ce que fait le firmware d'usine en 0x6713-0x68CD,
+     * et les valeurs ci-dessous sont les siennes, relevées une à une.
+     * DUTY2 part sur la même valeur : impulsion nulle, panneau noir.
+     */
+    SET_PWM_DUTY(PWM00, AULA_RGB_PHASE(15), AULA_RGB_PHASE(15));
+    SET_PWM_DUTY(PWM01, AULA_RGB_PHASE(16), AULA_RGB_PHASE(16));
+    SET_PWM_DUTY(PWM02, AULA_RGB_PHASE(17), AULA_RGB_PHASE(17));
+    SET_PWM_DUTY(PWM03, AULA_RGB_PHASE(12), AULA_RGB_PHASE(12));
+    SET_PWM_DUTY(PWM04, AULA_RGB_PHASE(13), AULA_RGB_PHASE(13));
+    SET_PWM_DUTY(PWM05, AULA_RGB_PHASE(14), AULA_RGB_PHASE(14));
+    SET_PWM_DUTY(PWM10, AULA_RGB_PHASE(6), AULA_RGB_PHASE(6));
+    SET_PWM_DUTY(PWM11, AULA_RGB_PHASE(7), AULA_RGB_PHASE(7));
+    SET_PWM_DUTY(PWM12, AULA_RGB_PHASE(8), AULA_RGB_PHASE(8));
+    SET_PWM_DUTY(PWM13, AULA_RGB_PHASE(9), AULA_RGB_PHASE(9));
+    SET_PWM_DUTY(PWM14, AULA_RGB_PHASE(10), AULA_RGB_PHASE(10));
+    SET_PWM_DUTY(PWM15, AULA_RGB_PHASE(11), AULA_RGB_PHASE(11));
+    SET_PWM_DUTY(PWM20, AULA_RGB_PHASE(0), AULA_RGB_PHASE(0));
+    SET_PWM_DUTY(PWM21, AULA_RGB_PHASE(1), AULA_RGB_PHASE(1));
+    SET_PWM_DUTY(PWM22, AULA_RGB_PHASE(2), AULA_RGB_PHASE(2));
+    SET_PWM_DUTY(PWM23, AULA_RGB_PHASE(3), AULA_RGB_PHASE(3));
+    SET_PWM_DUTY(PWM24, AULA_RGB_PHASE(4), AULA_RGB_PHASE(4));
+    SET_PWM_DUTY(PWM25, AULA_RGB_PHASE(5), AULA_RGB_PHASE(5));
 
     aula_rgb_clear();
 }
