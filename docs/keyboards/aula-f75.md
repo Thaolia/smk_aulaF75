@@ -1620,6 +1620,100 @@ Et sur les quinze colonnes utiles, la vérification est sans appel :
 `0xC500` et `0x2EED` ne sont donc pas deux cartes rivales, ce sont **une carte et son inverse** :
 `0xC500` va de la colonne électrique vers la colonne spatiale, `0x2EED` fait le chemin retour.
 
+#### Le champ de phase `0x9FEA`, et ses deux frères
+
+##### `0x9FEA` — vérifié, et son transposeur décodé
+
+Le transposeur `0xACA3` se lit instruction par instruction, et il fixe les deux dispositions sans
+ambiguïté :
+
+```asm
+0xACA3  r7 = 0 ; r6 = 0
+0xACA7  a = r6 ; b = 21 ; mul ab ; dptr = 0x0E49 + r6*21 ; dptr += r7
+0xACBF  r5 = [dptr]                          ; source : ligne*21 + colonne
+0xACC1  a = r7 ; b = 6 ; mul ab ; dptr = 0x0017 + r7*6 ; dptr += r6
+0xACD9  [dptr] = r5                          ; destination : colonne*6 + ligne
+0xACDB  inc r6 ; cjne r6,#6  -> boucle       ; r6 est la LIGNE, 0..5
+0xACE0  inc r7 ; cjne r7,#21 -> boucle       ; r7 est la COLONNE, 0..20
+```
+
+Donc **`CODE 0x9FEA` est rangé `ligne × 21 + colonne`** et le plan `0x0017` l'est en
+`colonne × 6 + ligne` : le transposeur fait exactement ce que son nom dit. Le portage transpose à la
+compilation, et ses 90 valeurs sont **identiques octet pour octet** à
+`CODE[0x9FEA + ligne × 21 + colonne]` pour les quinze colonnes utiles.
+
+L'enregistrement Keil est auto-validant : son en-tête est `7e 0e 49` — **126 octets vers `0x0E49`** —
+et le terminateur `0x00` de la table tombe exactement en `0xA068`, soit `0x9FEA + 126`. Aucune place
+pour un décalage.
+
+##### Deux frères, et le semeur qui choisit entre eux
+
+`0x9FEA` n'est pas le seul champ de phase. Le semeur de l'effet d'usine **6** — le scintillement
+`0x60C9` — est `0xA791`, et il charge le plan `0x0017` depuis **l'une de deux tables, selon le mode
+de couleur** `[0x011C]` :
+
+```asm
+0xA795  a = [0x011C] ; cjne a,#7 -> 0xA7AA
+0xA79C  dptr = 0x2A2E + colonne*6 + ligne     ; mode 7 : arc-en-ciel
+0xA7AA  dptr = 0x2AAC + colonne*6 + ligne     ; modes 0-6 : couleur fixe
+0xA7DD  [0x0017 + colonne*6 + ligne] = valeur ; PAS de transposition ici
+```
+
+Les deux font 126 octets et sont **déjà dans la disposition de destination** — contrairement à
+`0x9FEA`, elles n'ont pas besoin du transposeur.
+
+**Et leurs plages valident les modules que cette page avait relevés séparément :**
+
+| Table | Mode | Valeurs | Module appliqué par le moteur |
+| --- | --- | --- | --- |
+| `CODE 0x2A2E` | 7, arc-en-ciel | 1 → **191** | `0xC0` = 192 — soit **max + 1** |
+| `CODE 0x2AAC` | 0 à 6, fixe | 0 → **95** | `0x60` = 96 — soit **max + 1** |
+
+Le semeur choisit donc la table dont la plage est exactement celle du module que le moteur va
+appliquer. Deux relevés indépendants — le `0xEDA2(phase, 0xC0 / 0x60)` du moteur et le contenu des
+tables — qui se referment l'un sur l'autre.
+
+**Leur forme est un chevron.** Les lignes 0 à 2 partagent une rampe, les lignes 3 à 5 la rampe
+miroir :
+
+```
+0x2A2E   l0-l2 :   1   6  11  16  21 ...  99      (+5 par colonne)
+         l3-l5 : 191 190 188 185 180 ... 103      (-5 par colonne)
+
+0x2AAC   l0-l2 :   0   7  14  21  28 ...  95      (+7 par colonne)
+         l3-l5 :  84  77  70  63  56 ...          (-7 par colonne)
+```
+
+À noter : `0x2A2E` balaie les vingt-et-une colonnes d'un seul chevron — ses deux moitiés se
+rejoignent vers 99 et 103 à la colonne 20. `0x2AAC`, elle, **redémarre à zéro à la colonne 15** sur
+sa moitié haute tandis que sa moitié basse poursuit sa descente. Constaté, pas expliqué.
+
+##### Le bloc de données est parfaitement contigu
+
+Les huit tables de cette région s'enchaînent sans un octet de jeu ni de recouvrement :
+
+| Adresse | Taille | Contenu | Fin |
+| --- | --- | --- | --- |
+| `0x2A2E` | 126 | champ de phase effet 6, mode 7 | `0x2AAC` |
+| `0x2AAC` | 126 | champ de phase effet 6, couleur fixe | `0x2B2A` |
+| `0x2B2A` | 576 | roue de teintes, 192 × 3 | `0x2D6A` |
+| `0x2D6A` | 3 | le blanc isolé, lu par personne | `0x2D6D` |
+| `0x2D6D` | 384 | seconde roue, 128 × 3 | `0x2EED` |
+| `0x2EED` | 126 | table A | `0x2F6B` |
+| `0x2F6B` | 126 | table B | `0x2FE9` |
+| `0x2FE9` | 75 | périodes, 15 × 5 | `0x3034` |
+
+Chaque borne tombe exactement sur la suivante. C'est la validation croisée la plus forte de tout ce
+chapitre : huit tailles déduites séparément, aucune ne déborde, aucune ne laisse de trou.
+
+##### Ce que le portage en a, et ce qu'il n'a pas
+
+`0x9FEA` est porté et vérifié. Les deux frères **ne le sont pas**, et pour une raison de périmètre :
+ils appartiennent à l'effet d'usine 6, le scintillement à phase par touche, qui n'a **aucun
+équivalent** dans les treize effets du portage — celui qu'il appelle `AULA_FX_TWINKLE` transcrit
+l'effet 8, à semeur aléatoire. Les porter demanderait d'ajouter un quatorzième effet ; la donnée est
+là, le moteur est documenté, c'est une décision de conception.
+
 ##### Les six colonnes au-delà de 15 — un modèle de 113 touches
 
 La grille d'usine fait 6 × 21. Ce clavier en occupe quinze colonnes ; voici ce que portent les six
