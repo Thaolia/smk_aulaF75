@@ -133,7 +133,16 @@ static const __code uint8_t led_speeds[] = {1, 2, 4, 8, 16};
  * donc la TRAÎNÉE garde la même longueur -- environ quatre touches -- à toutes
  * les vitesses, et seul le mouvement accélère.
  */
-#define SPARK_DECAY (uint8_t)(4u << user_settings.led_speed)
+/*
+ * Décroissance du plan d'intensité, par TRAME d'animation et non par balayage.
+ *
+ * Elle ne dépend plus de la vitesse, et c'est le firmware d'usine qui le dit :
+ * son rendu calcule `base * intensité >> 5`, donc l'intensité ne porte que
+ * TRENTE-ET-UN niveaux, et le moteur réactif `0x64F1` en retire exactement un
+ * par trame rendue. 255 / 31 = 8. Toute la réponse à la vitesse est portée par
+ * la période de trame ci-dessous, exactement comme en usine.
+ */
+#define SPARK_DECAY ((uint8_t)8)
 static __xdata uint8_t spark_hue[LED_COLS][LED_ROWS];
 static __xdata uint8_t spark_val[LED_COLS][LED_ROWS];
 static __xdata uint8_t spark_prev[LED_COLS];
@@ -175,7 +184,8 @@ static uint8_t         snake_row;
 static uint8_t         snake_right; /* sens horizontal courant */
 static uint8_t         snake_down;  /* sens vertical courant */
 static uint8_t         ripple_ring;
-static uint8_t         fx_frame_div; /* compteur du diviseur de trame */
+static uint8_t         fx_ms_acc;    /* millisecondes accumulées depuis la dernière trame */
+static __bit           spark_decay_due; /* la trame écoulée autorise la décroissance */
 
 /* Allume une touche à fond, si la grille en porte une à cette position. */
 static void spark_seed(uint8_t col, uint8_t row, uint8_t hue)
@@ -327,8 +337,9 @@ static void fx_reset(void)
     snake_row    = 0;
     snake_right  = 1;
     snake_down   = 1;
-    ripple_ring  = 0;
-    fx_frame_div = 0;
+    ripple_ring     = 0;
+    fx_ms_acc       = 0;
+    spark_decay_due = 0;
 
     /*
      * La phase repart de zéro, comme en usine. L'aiguillage de 0x1AA8 ressème
@@ -340,21 +351,93 @@ static void fx_reset(void)
     led_phase = 0;
 }
 
-static void fx_frame_advance(void)
+/*
+ * PÉRIODES D'USINE -- relevées, plus inférées.
+ *
+ * `CODE 0x2FE9` porte quinze tables de cinq octets, indexées par la vitesse
+ * 0 à 4. L'unité est le tic de systick d'usine, et ce tic vaut UNE
+ * MILLISECONDE : le raccourci de réinitialisation exige que son compteur
+ * atteigne 3000 tics (`0x870C`), et un appui long, c'est trois secondes.
+ *
+ * Quelle table chaque effet charge est décidé par son SEMEUR, dans la table de
+ * répartition `0x1744` -- une entrée par effet, la clé étant l'effet demandé.
+ * D'où la correspondance ci-dessous, entièrement tirée du dump :
+ *
+ *   notre effet         effet d'usine  moteur    table d'usine
+ *   ------------------  -------------  --------  ------------------------------
+ *   FX_RADIAL                 1        0x746A    aucune -- période FIXE 10, en dur dans `0x1B61`
+ *   FX_HORIZONTAL             2        0x7C12    `0x2FF3`
+ *   FX_VERTICAL              11        0x6C9B    `0x3016`
+ *   FX_SOLID                  3        0x9DA4    `0x2FF8`
+ *   AULA_FX_REACTIVE         12        0x64F1    `0x301B`
+ *   AULA_FX_RAIN              5        0x9B2B    `0x2FE9`
+ *   AULA_FX_TWINKLE           8        0xAC1C    AUCUNE -- choix : celle de l'autre scintillement (effet 6)
+ *   AULA_FX_SNAKE            10        0x8DDF    `0x3011`
+ *   AULA_FX_SNAKE_RGB      0x26        0x1D05    AUCUNE -- choix : celle du serpent, même moteur
+ *   AULA_FX_RIPPLE           17        0x746A    `0x302F`
+ *   AULA_FX_KEYWAVE          15        0x82A5    `0x3025`
+ *   AULA_FX_VRAINBOW         16        0x9659    `0x302A`
+ *   AULA_FX_GAMING         0x20        0x95A4    AUCUNE -- image fixe : choix, celle de l'uni
+ *
+ * Trois lignes sont donc un CHOIX et non une transcription ; elles sont
+ * signalées comme telles. Les dix autres sont les octets du dump.
+ */
+static const __code uint8_t fx_period_ms[AULA_FX_OFF][LED_SPEED_LEVELS] = {
+    { 10,  10,  10,  10,  10}, /* FX_RADIAL     -- période fixe de 0x1B61     */
+    { 45,  35,  25,  15,   5}, /* FX_HORIZONTAL -- CODE 0x2FF3                */
+    { 30,  24,  18,  12,   6}, /* FX_VERTICAL   -- CODE 0x3016                */
+    { 45,  35,  25,  15,   6}, /* FX_SOLID      -- CODE 0x2FF8                */
+    { 32,  24,  18,  16,   6}, /* REACTIVE      -- CODE 0x301B                */
+    {120, 100,  80,  50,  20}, /* RAIN          -- CODE 0x2FE9                */
+    { 20,  15,  10,   5,   1}, /* TWINKLE       -- CODE 0x3002, choix         */
+    {120,  90,  70,  45,   1}, /* SNAKE         -- CODE 0x3011                */
+    {120,  90,  70,  45,   1}, /* SNAKE_RGB     -- celle du serpent, choix    */
+    { 50,  40,  30,  20,   8}, /* RIPPLE        -- CODE 0x302F                */
+    { 32,  24,  16,   8,   1}, /* KEYWAVE       -- CODE 0x3025                */
+    { 46,  36,  26,  16,   6}, /* VRAINBOW      -- CODE 0x302A                */
+    { 45,  35,  25,  15,   6}, /* GAMING        -- image fixe, choix          */
+};
+
+/*
+ * Durée d'un balayage de régénération, en millisecondes.
+ *
+ * `tick.c` alterne UN balayage de matrice et `LED_SUBFRAMES_PER_SCAN` = 15
+ * sous-trames LED. Une sous-trame dure 400 us (`RELOAD_LED_SUBFRAME`) et le
+ * créneau de balayage environ 420 us, soit 6,42 ms par groupe de quinze. Une
+ * cellule est régénérée par sous-trame, donc les 90 cellules demandent six
+ * groupes : 38,5 ms.
+ */
+#define LED_SWEEP_MS ((uint8_t)38)
+
+/*
+ * ⚠️ CE QUE CETTE ARCHITECTURE NE PEUT PAS RENDRE.
+ *
+ * L'usine redessine le panneau entier à chaque trame et peut donc descendre à
+ * une milliseconde. Ici une trame COÛTE un balayage de régénération, 38,5 ms :
+ * toute période inférieure est ramenée à « une trame ». Le tableau ci-dessus
+ * n'en est pas dénaturé -- il garde les écarts entre effets, et la pluie comme
+ * le serpent conservent leur gradient de vitesse -- mais les périodes rapides
+ * s'y écrasent, et c'est notre plancher, pas celui du firmware d'usine.
+ *
+ * C'est aussi pourquoi `led_speeds[]` continue de faire varier le PAS de phase :
+ * l'usine garde un pas fixe et fait varier la cadence, nous ne pouvons faire
+ * varier la cadence que d'un facteur trois. Sans le pas variable, SPD_UP et
+ * SPD_DN ne se verraient presque plus. Ce point-là est un choix, assumé.
+ */
+static bool fx_frame_advance(void)
 {
-    /*
-     * LA VITESSE PILOTE AUSSI LE MOUVEMENT, pas seulement la teinte.
-     *
-     * `led_speeds[]` ne fait avancer que `led_phase` : sans ce diviseur,
-     * SPD_UP/SPD_DN changeraient la couleur de la pluie et du serpent mais pas
-     * leur allure -- la gouttelette tomberait d'une ligne par trame quel que
-     * soit le réglage. Le firmware d'usine, lui, conditionne tout son rendu à
-     * `tic >= période`, période tirée de `CODE 0x2FE9` selon la vitesse.
-     */
-    if (++fx_frame_div < (uint8_t)(16u >> user_settings.led_speed)) {
-        return;
+    const uint8_t period = fx_period_ms[user_settings.led_effect][user_settings.led_speed];
+
+    fx_ms_acc = (uint8_t)(fx_ms_acc + LED_SWEEP_MS);
+    if (fx_ms_acc < period) {
+        return false;
     }
-    fx_frame_div = 0;
+    fx_ms_acc = (uint8_t)(fx_ms_acc - period);
+    if (fx_ms_acc >= period) {
+        fx_ms_acc = 0; /* une trame ne peut pas aller plus vite qu'un balayage */
+    }
+
+    led_phase = (uint8_t)(led_phase + led_speeds[user_settings.led_speed]);
 
     switch (user_settings.led_effect) {
         case AULA_FX_RAIN:      rain_step();     break;
@@ -364,6 +447,7 @@ static void fx_frame_advance(void)
         case AULA_FX_RIPPLE:    ripple_step();   break;
         default:                                 break;
     }
+    return true;
 }
 
 #define LED_BRIGHTNESS_DEFAULT (LED_BRIGHTNESS_LEVELS - 1)
@@ -477,9 +561,11 @@ static void led_regen_one(void)
             aula_rgb_wheel(spark_hue[regen_col][regen_row], rgb);
             aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], k), led_scale(rgb[1], k),
                          led_scale(rgb[2], k));
-            const uint8_t decay = SPARK_DECAY;
+            if (spark_decay_due) {
+                const uint8_t decay = SPARK_DECAY;
 
-            spark_val[regen_col][regen_row] = (val > decay) ? (uint8_t)(val - decay) : 0;
+                spark_val[regen_col][regen_row] = (val > decay) ? (uint8_t)(val - decay) : 0;
+            }
         }
     } else if (user_settings.led_effect == AULA_FX_VRAINBOW) {
         /*
@@ -539,8 +625,9 @@ static void led_regen_one(void)
         regen_col = 0;
         if (++regen_row >= LED_ROWS) {
             regen_row = 0;
-            led_phase = (uint8_t)(led_phase + led_speeds[user_settings.led_speed]);
-            fx_frame_advance();
+            /* La phase avance DANS la porte de trame, comme en usine : le rendu
+             * d'usine est entièrement conditionné à `tic >= période`. */
+            spark_decay_due = fx_frame_advance();
         }
     }
 }

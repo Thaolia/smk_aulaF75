@@ -700,16 +700,70 @@ pourtant pointer sur le même moteur `0x5BE9`.
 Et `0x2EED` réapparaît ici par une voie indépendante, avec son pas de 21 octets par ligne : la base
 corrigée de la table A est confirmée une seconde fois.
 
-##### Ce que le portage pourrait en tirer, et n'en tire pas
+##### Ce que le portage en tire — c'est fait
 
-`indicators.c` cadence ses animations avec un diviseur inventé, `16 >> led_speed`, et une décroissance
-`4 << led_speed`. Les quinze tables ci-dessus sont la donnée d'usine correspondante — **mesurée, pas
-inférée**. Les reprendre remplacerait une invention par un relevé.
+`indicators.c` cadençait ses animations avec un diviseur inventé, `16 >> led_speed`, et une
+décroissance `4 << led_speed`. Les deux sont remplacés par la donnée d'usine.
 
-Ce n'est pas fait ici, et pour une raison précise : les treize effets du portage ne sont pas les
-dix-neuf d'usine, la correspondance n'est pas bijective, et brancher des périodes d'usine sur des
-moteurs réécrits changerait le comportement de treize effets qui n'ont jamais tourné. C'est une
-décision de conception, pas une transcription ; elle appartient à qui la demandera.
+**L'unité est la milliseconde.** Le tic de systick d'usine vaut 1 ms, et l'ancre est le raccourci de
+réinitialisation : son compteur doit atteindre **3000** tics (`0x870C`), et un appui long, c'est trois
+secondes.
+
+**La correspondance effet → table vient du répartiteur `0x1744`**, pas d'une appréciation : chaque
+semeur charge sa table, et le moteur atteint par le gestionnaire de rendu identifie l'effet d'usine
+que le portage transcrit.
+
+| Notre effet | Effet d'usine | Moteur | Table |
+| --- | --- | --- | --- |
+| `FX_RADIAL` | 1 | `0x746A` | aucune — période **fixe 10**, en dur dans `0x1B61` |
+| `FX_HORIZONTAL` | 2 | `0x7C12` | `0x2FF3` |
+| `FX_VERTICAL` | 11 | `0x6C9B` | `0x3016` |
+| `FX_SOLID` | 3 | `0x9DA4` | `0x2FF8` |
+| `AULA_FX_REACTIVE` | 12 | `0x64F1` | `0x301B` |
+| `AULA_FX_RAIN` | 5 | `0x9B2B` | `0x2FE9` |
+| `AULA_FX_TWINKLE` | 8 | `0xAC1C` | **aucune** — *choix* : celle de l'autre scintillement |
+| `AULA_FX_SNAKE` | 10 | `0x8DDF` | `0x3011` |
+| `AULA_FX_SNAKE_RGB` | `0x26` | `0x1D05` | **aucune** — *choix* : celle du serpent, même moteur |
+| `AULA_FX_RIPPLE` | 17 | `0x746A` | `0x302F` |
+| `AULA_FX_KEYWAVE` | 15 | `0x82A5` | `0x3025` |
+| `AULA_FX_VRAINBOW` | 16 | `0x9659` | `0x302A` |
+| `AULA_FX_GAMING` | `0x20` | `0x95A4` | **aucune** — image fixe, *choix* |
+
+Trois lignes sur treize sont un choix, signalé comme tel dans le code ; les dix autres sont les
+octets du dump.
+
+**La porte de trame accumule des millisecondes**, sans division : chaque balayage ajoute `38` et
+soustrait la période quand elle est atteinte. Les périodes fractionnaires sont donc respectées —
+la pluie à la vitesse 0 tombe toutes les **3,16** trames, pas 3.
+
+**La décroissance devient une constante, et c'est la bonne.** Le rendu d'usine calcule
+`base × intensité >> 5` : l'intensité ne porte que **trente-et-un** niveaux, et `0x64F1` en retire
+**un par trame rendue**. Sur notre plan de 0 à 255, cela fait `255 / 31 = 8`, indépendant de la
+vitesse — toute la réponse à `SPD_UP`/`SPD_DN` passe désormais par la période, exactement comme en
+usine. La décroissance est en conséquence conditionnée à la trame, plus au balayage.
+
+##### Ce que cette architecture ne peut pas rendre
+
+L'usine redessine le panneau entier à chaque trame et descend à **1 ms**. Ici une trame coûte un
+balayage de régénération — quinze sous-trames de 400 µs plus un créneau de balayage, six fois, soit
+**38,5 ms**. Toute période inférieure est ramenée à une trame :
+
+| Effet | Balayages par trame, vitesses 0 → 4 |
+| --- | --- |
+| `RAIN` | 3,16 · 2,63 · 2,11 · 1,32 · 1,00 |
+| `SNAKE` | 3,16 · 2,37 · 1,84 · 1,18 · 1,00 |
+| `RIPPLE` | 1,32 · 1,05 · 1,00 · 1,00 · 1,00 |
+| les neuf autres | ≈ 1 partout |
+
+Le gradient survit là où l'usine est lente, il s'écrase là où elle est rapide. **C'est notre
+plancher, pas le sien.**
+
+C'est aussi pourquoi `led_speeds[]` continue de faire varier le **pas de phase** alors que l'usine
+garde un pas fixe : notre cadence ne peut varier que d'un facteur trois, et sans le pas variable
+`SPD_UP` et `SPD_DN` ne se verraient presque plus. Ce point-là est un choix, assumé dans le code.
+
+Et le gain est réel : à la vitesse la plus lente, le portage passait une trame toutes les **616 ms**
+contre les **46 ms** de l'usine — seize fois trop lent. Il est maintenant à 38,5 ms.
 
 #### L'aiguillage
 
