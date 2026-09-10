@@ -3167,7 +3167,7 @@ posés ⇒ abandon — encodées tantôt en `JNB`+`LJMP`, tantôt en `JB` court 
 | `b0` | Arm | Voie |
 | --- | --- | --- |
 | `0x00` | `0x7018` | **rapport clavier** |
-| `0x01` | `0x85FB` | **actions spéciales**, via une *cinquième* table de sauts |
+| `0x01` | `0x85FB` | **rapport souris**, via une table de sauts de treize entrées |
 | `0x02` | `0x001E` | **rapport Consumer** |
 | `0x03` | `0xA37E` | **file d'émission radio** |
 | `0x04` | `0xB041` | rapport brut à trois octets |
@@ -3185,10 +3185,8 @@ posés ⇒ abandon — encodées tantôt en `JNB`+`LJMP`, tantôt en `JB` court 
 suivante : les positions portant une puissance de deux en `b1` passent par ici, et c'est ici que le
 masque est appliqué.
 
-**`b0 = 1` — les actions spéciales.** Une **cinquième table de sauts**, en `0x865E`, treize entrées
-de trois octets indexées par `b1 - 1` : les cinq premières partagent `0x8685`, les huit autres vont
-en `0x8699`, `0x869E`, `0x86A3`, `0x86AB`, `0x86B3`, `0x86B8`, `0x86BD`, `0x86C7`. Au relâchement,
-`[0x09B1] &= CODE 0xEF04[b1 - 1]`.
+**`b0 = 1` — le rapport souris.** Une table de sauts en `0x865E`, treize entrées indexées par
+`b1 - 1`. Détail complet ci-dessous.
 
 **`b0 = 2` — le rapport Consumer.** `[0x09BD] = b3`, `[0x09BE] = b2`, bit `0x50` posé. Exactement
 la structure que cette page décrit ailleurs : `0x09BC` porte le Report ID 2 et `0x09BD:0x09BE`
@@ -3233,6 +3231,115 @@ partagent `fx_mode_toggle`.
 efface les bits **`0x44`** et **`0x43`**. Ce sont **exactement les deux bits que l'arm de l'effet
 `0x2D` (`0x1A04`) teste** avant d'appeler `0x8A1A`. Une touche de cette voie conditionne donc le
 travail par trame de cet effet — deux tables décodées séparément qui se referment l'une sur l'autre.
+
+#### La table `0x865E` — les treize actions souris
+
+`b0 = 1` mène en `0x85FB`, qui sépare l'appui du relâchement sur le bit `0x42`, puis, à l'appui,
+branche sur une table de sauts calculée :
+
+```asm
+0x8643  a = [0x0D17] ; dec a ; cjne a,#0x0D ; jc 0x8650   ; borne : b1-1 < 13
+0x864D  ljmp 0x86D0                                       ; hors borne -> queue
+0x8650  dptr = 0x865E ; b = 3 ; mul ab ; ... ; jmp @a+dptr
+```
+
+##### Ce que c'est, prouvé par le descripteur HID
+
+Les cinq variables que ces arms écrivent — `[0x09B1]`, `[0x09B2:0x09B3]`, `[0x09B4:0x09B5]`,
+`[0x09B6]`, `[0x09B7]` — sont le **rapport souris**. Le descripteur HID, en `CODE 0x5F7D`, le dit
+mot pour mot :
+
+```
+05 01 09 02        Usage Page (Generic Desktop), Usage (Mouse)
+a1 01  85 07       Collection (Application), Report ID 7
+09 01  a1 00       Usage (Pointer), Collection (Physical)
+05 09  19 01 29 05   Usage Page (Button), Usage Min 1 .. Max 5   <-- CINQ boutons
+75 01 95 05 81 02    5 bits, + 95 03 81 01 : trois bits de bourrage
+05 01  16 00 80 26 ff 7f   Logical Min -32768, Max 32767
+09 30 09 31  75 10 95 02 81 06   Usage X, Usage Y, SEIZE bits chacun, relatifs
+15 81 25 7f  09 38  75 08 95 01 81 06   Wheel, huit bits, -127..127
+05 0c  0a 38 02  ...                    Usage Page (Consumer), AC Pan
+```
+
+La correspondance est exacte, champ par champ :
+
+| Champ du rapport | Taille | Variable |
+| --- | --- | --- |
+| boutons 1 à 5 | 5 bits | `[0x09B1]` |
+| X | 16 bits | `[0x09B2]` (poids faible) `:` `[0x09B3]` (poids fort) |
+| Y | 16 bits | `[0x09B4]` `:` `[0x09B5]` |
+| molette | 8 bits | `[0x09B6]` |
+| AC Pan | 8 bits | `[0x09B7]` |
+
+L'ordre poids-faible-d'abord se vérifie sur le convertisseur `0x568C`, qui étend le signe d'un delta
+huit bits venu de `[0x0F66]` : il écrit `0xFF` ou `0x00` dans `[0x09B3]` selon `ACC.7`, puis le delta
+dans `[0x09B2]`.
+
+##### Les treize
+
+| `b1` | Arm | Action |
+| --- | --- | --- |
+| `1` | `0x8685` | **bouton 1** — `[0x09B1] \|= 0x01` |
+| `2` | `0x8685` | **bouton 2** — `\|= 0x02` |
+| `3` | `0x8685` | **bouton 3** — `\|= 0x04` |
+| `4` | `0x8685` | **bouton 4** — `\|= 0x08` |
+| `5` | `0x8685` | **bouton 5** — `\|= 0x10` |
+| `6` | `0x8699` | **AC Pan +1** — `[0x09B7] = 0x01` |
+| `7` | `0x869E` | **AC Pan −1** — `[0x09B7] = 0xFF` |
+| `8` | `0x86A3` | **molette +1** — `[0x09B6] = 0x01` |
+| `9` | `0x86AB` | **molette −1** — `[0x09B6] = 0xFF` |
+| `10` | `0x86B3` | **X = −1** — `[0x09B2:0x09B3] = 0xFF, 0xFF` |
+| `11` | `0x86B8` | **X = +1** — `= 0x01, 0x00` |
+| `12` | `0x86BD` | **Y = −1** — `[0x09B4:0x09B5] = 0xFF, 0xFF` |
+| `13` | `0x86C7` | **Y = +1** — `= 0x01, 0x00` |
+
+Les cinq premières partagent un seul corps parce qu'elles ne diffèrent que par le bit : `0x8685` lit
+`CODE 0xEF04[b1-1]`, le complémente et l'applique en `ORL`.
+
+##### `CODE 0xEF04` — une table, deux usages
+
+```
+fe fd fb f7 ef df bf 7f | 01 02 04 08 10 20 40 80
+```
+
+Huit masques d'**effacement** suivis des huit masques de **positionnement**. Le chemin d'appui lit le
+masque d'effacement et le `CPL` pour obtenir celui de positionnement ; le chemin de relâchement
+l'utilise tel quel. Une seule table de seize octets sert les deux sens.
+
+##### `b2` est la période de répétition
+
+Après l'arm, la queue `0x86D0` s'exécute **si `b2 ≥ 2`** :
+
+```asm
+[0x0C37 + (b1-1)] = b2 * 2      ; compte a rebours de repetition
+[0x0390 + (b1-1)] = b3
+[0x0C45 + (b1-1)] = b3
+setb 0x41                       ; repetition armee
+```
+
+Et le relâchement, si `b2 == 0xFF`, remet `[0x0C37 + (b1-1)]` et `[0x0390 + (b1-1)]` à zéro. Les
+boutons (`b1 ≤ 5`) voient en plus leur bit effacé dans `[0x09B1]`.
+
+Ce compte à rebours est consommé par un **bloc jumeau** : `0x7B17`, avec sa propre table de sauts en
+`0x7B25`, **treize entrées de même forme et mêmes cibles fonctionnelles**, qui réapplique l'action
+tant que la touche est tenue et décrémente `[0x0C37 + (b1-1)]` en `0x7BAE`. `b2` est donc la
+**cadence d'auto-répétition** de l'action souris, en pas de deux tics.
+
+##### Inventaire des tables de sauts de l'image
+
+Avec celle-ci, le compte est clos. **Quatre** tables inline lues par le répartiteur `0x4E45` —
+`0x0859`, `0x1744`, `0x4139`, `0x8848` — et **cinq** tables de `LJMP` adressées par
+`jmp @a+dptr` :
+
+| Site | Table | Entrées | Sujet |
+| --- | --- | --- | --- |
+| `0x0487` | `0x0495` | 8 | — |
+| `0x390E` | `0x391C` | 10 | — |
+| `0x5809` | `0x5817` | 9 | — |
+| `0x7B17` | `0x7B25` | 13 | répétition souris |
+| `0x8650` | `0x865E` | 13 | **actions souris** |
+
+Les trois premières restent non décodées ; elles ne sont pas sur le chemin de l'appui de touche.
 
 #### Les six modificateurs, et la tension sur `0x0D17` levée
 
