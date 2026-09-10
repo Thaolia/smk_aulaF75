@@ -192,13 +192,24 @@ uint8_t aula_fx_render_col(uint8_t col, uint8_t row)
 }
 
 /*
- * Image « gaming », plan bleu de CODE 0xCAFC (les plans rouge et vert sont
- * entièrement nuls : l'image d'usine est bleue).
+ * Image « gaming », réduite de CODE 0xCAFC.
  *
- * Sa lecture confirme tout notre plan de matrice par une voie indépendante :
- * les positions allumées tombent exactement sur Échap, W, A, S, D et les quatre
- * flèches de layouts/default/layout.c. Aucun réglage n'aurait pu faire
- * coïncider neuf positions par hasard.
+ * ⚠️ CORRECTION DE PROVENANCE. Ce commentaire disait « plan bleu, les plans
+ * rouge et vert sont nuls, l'image d'usine est bleue ». C'est faux : `0xCAFC`
+ * n'est pas trois plans de couleur mais **un seul octet par touche**, 126 en
+ * tout, indexé `colonne * 6 + ligne`, valant `0xFF` sur les touches allumées et
+ * zéro ailleurs. Il n'y a AUCUNE couleur dans cette table -- c'est un masque, et
+ * la couleur vient du mode de couleur comme pour tous les autres effets.
+ *
+ * Les neuf positions non nulles sont les indices 0, 9, 14, 15, 21, 77, 82, 83
+ * et 89, soit (0,0) (1,3) (2,2) (2,3) (3,3) (12,5) (13,4) (13,5) (14,5) :
+ * Échap, A, W, S, D et les quatre flèches de layouts/default/layout.c. Aucun
+ * réglage n'aurait pu faire coïncider neuf positions par hasard -- cette partie
+ * de la lecture tenait, et tient toujours.
+ *
+ * Les quinze octets ci-dessous sont la réduction par colonne de ces 126, et la
+ * reconstruction depuis le dump les redonne exactement. Les colonnes 15 à 20 de
+ * la table d'usine sont entièrement nulles.
  */
 static const __code uint8_t gaming[AULA_FX_COLS] = {
     0x01, 0x08, 0x0c, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x30, 0x20,

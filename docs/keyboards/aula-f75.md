@@ -1620,6 +1620,70 @@ Et sur les quinze colonnes utiles, la vérification est sans appel :
 `0xC500` et `0x2EED` ne sont donc pas deux cartes rivales, ce sont **une carte et son inverse** :
 `0xC500` va de la colonne électrique vers la colonne spatiale, `0x2EED` fait le chemin retour.
 
+##### Les six colonnes au-delà de 15 — un modèle de 113 touches
+
+La grille d'usine fait 6 × 21. Ce clavier en occupe quinze colonnes ; voici ce que portent les six
+autres, et ce que cela apprend.
+
+**La forme.** En comptant les positions non vides de `CODE 0xC500` :
+
+```
+c 0 ######   c 5 ######   c10 ######   c15 ######  <-- au-dela de ce clavier
+c 1 .#####   c 6 #####.   c11 #####.   c16 ######
+c 2 ######   c 7 #####.   c12 ######   c17 .#####
+c 3 #####.   c 8 ######   c13 ######   c18 .####.
+c 4 #####.   c 9 ######   c14 ######   c19 .#####
+                                       c20 .##.#.
+```
+
+**84 touches sur les colonnes 0 à 14, 29 sur les colonnes 15 à 20 : 113 en tout.** Le firmware de ce
+F75 porte la carte complète d'un modèle de 113 touches de la même famille — un format à pavé
+numérique, dont le F75 est la découpe à quinze colonnes.
+
+**Aucune permutation au-delà de 14.** Les identifiants de `0xC500` y valent exactement
+`colonne × 8 + ligne`, et les tables A (`0x2EED`) et B (`0x2F6B`) y sont l'identité. La permutation
+de la ligne 4 est confinée aux quinze premières colonnes : c'est bien un détail de la découpe 75 %,
+pas une propriété du grand modèle.
+
+**Mais ce ne sont pas des colonnes de remplissage.** Trois relevés le prouvent :
+
+| Structure | Taille | Ce que portent les colonnes 15-20 |
+| --- | --- | --- |
+| champ de phase `CODE 0x9FEA` | **126 octets** | des valeurs continues de 15 à 71 — **aucun zéro sur les 126 entrées**, le balayage angulaire se poursuit |
+| couronnes de l'onde `CODE 0x2959` | 9 × 13 | **huit identifiants des colonnes 15 et 16** : `0x7A`-`0x7D`, `0x80`-`0x85` |
+| masque « gaming » `CODE 0xCAFC` | **126 octets** | rien — les neuf touches allumées sont toutes dans les colonnes 0 à 14 |
+
+Et les structures en XRAM sont dimensionnées pour 126, pas 90 :
+
+- la table de couleurs `0x0152` fait **378 octets = 126 × 3**, ce que l'opcode `0x42` relit
+  exactement (27 blocs × 14) ;
+- le plan d'état par touche `0x0017` fait **126 octets**, `0x0017` + `colonne × 6 + ligne` ;
+- l'index de la file de touches est borné à **126** en `0x1670`.
+
+Conséquence pour le portage : `aula_fx_ring()` rend des identifiants de touches **que ce clavier n'a
+pas**. `spark_seed()` les écarte par sa borne de colonne — c'était déjà le cas, c'est maintenant dit
+en clair dans `ripple_step()` au lieu d'être un effet de bord heureux.
+
+##### Correction : `CODE 0xCAFC` n'est pas trois plans de couleur
+
+Cette page et le portage décrivaient l'image « gaming » comme **trois plans de quinze octets dont
+seul le bleu serait non nul**, d'où un rendu bleu écrit en dur. C'est faux, et la recherche le montre
+sans appel : **la séquence de quinze octets que le portage utilisait n'existe nulle part dans
+l'image.** Elle était dérivée, pas transcrite.
+
+`0xCAFC` est **un seul octet par touche**, 126 en tout, indexé `colonne × 6 + ligne`, valant `0xFF`
+sur les touches allumées et zéro ailleurs. Ses neuf positions non nulles sont les indices
+0, 9, 14, 15, 21, 77, 82, 83, 89 — soit `(0,0) (1,3) (2,2) (2,3) (3,3) (12,5) (13,4) (13,5) (14,5)`,
+c'est-à-dire **Échap, A, W, S, D et les quatre flèches**. La partie qui tenait tient toujours : neuf
+positions qui tombent exactement sur la disposition compilée ne sont pas un hasard.
+
+Ce qui ne tenait pas, c'est la couleur : **il n'y a aucune couleur dans cette table**. Le bleu était
+une invention née de la mauvaise lecture. L'effet prend désormais le mode de couleur, comme tous les
+autres ; le bleu reste accessible, c'est le mode 2.
+
+La réduction par colonne que le portage garde est juste — reconstruite depuis les 126 octets réels,
+elle redonne exactement les mêmes quinze valeurs.
+
 ##### Conséquence sur le portage : deux tables dérivées deviennent une transcription
 
 `aula_fx.c` portait deux tables **dérivées** — un masque de présence de 15 octets et une carte de

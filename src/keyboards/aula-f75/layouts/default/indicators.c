@@ -303,7 +303,14 @@ static void ripple_step(void)
     for (slot = 0; slot < AULA_FX_RING_SLOTS; slot++) {
         const uint8_t id = aula_fx_ring(ripple_ring, slot);
 
-        if (id == 0xff) {
+        /*
+         * `0xFF` marque une place vide dans la couronne -- mais la table d'usine
+         * contient aussi des touches que CE clavier n'a pas : huit identifiants
+         * des colonnes 15 et 16 (`0x7A`-`0x7D`, `0x80`-`0x85`), qui appartiennent
+         * au modèle de vingt-et-une colonnes de la même famille. `spark_seed()`
+         * les écarte par sa borne de colonne ; c'est voulu, pas un hasard.
+         */
+        if (id == AULA_FX_NO_KEY) {
             continue;
         }
         spark_seed((uint8_t)(id >> 3), (uint8_t)(id & 7u),
@@ -650,12 +657,22 @@ static void led_regen_one(void)
                      led_scale(rgb[2], gain));
     } else if (user_settings.led_effect == AULA_FX_GAMING) {
         /*
-         * Image statique de CODE 0xCAFC : Échap, W A S D et le pavé fléché en
-         * bleu. Les plans rouge et vert d'usine sont entièrement nuls.
+         * Image statique de CODE 0xCAFC : Échap, A W S D et le pavé fléché.
+         *
+         * Le bleu codé en dur qui était ici reposait sur une lecture fausse de
+         * la table -- trois plans de couleur dont seul le bleu serait non nul.
+         * `0xCAFC` est en réalité un MASQUE d'un octet par touche, sans aucune
+         * couleur (voir aula_fx.c). La couleur vient donc du mode de couleur,
+         * comme pour tous les autres effets ; le bleu reste accessible, c'est
+         * le mode 2.
          */
-        const uint8_t lit = aula_fx_gaming(regen_col) & (uint8_t)(1u << regen_row);
-
-        aula_rgb_set(regen_row, regen_col, 0, 0, lit ? gain : 0);
+        if (aula_fx_gaming(regen_col) & (uint8_t)(1u << regen_row)) {
+            fx_color(led_phase, rgb);
+            aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
+                         led_scale(rgb[2], gain));
+        } else {
+            aula_rgb_set(regen_row, regen_col, 0, 0, 0);
+        }
     } else if (user_settings.led_effect == (uint8_t)FX_SOLID) {
         /*
          * Le blanc en dur était une invention : l'effet d'usine d'indice 3
