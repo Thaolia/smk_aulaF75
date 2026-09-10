@@ -580,6 +580,137 @@ laisse les octets indéfinis. Il se lit au désassemblage, depuis une ancre sûr
 > l'adresse d'un octet haut d'un mot 16 bits ne donne rien — c'est le piège du pointeur calculé,
 > déjà rencontré sur le bloc de réglages.
 
+#### Ce qui précède l'aiguillage — la table `0x1744`, dix-neuf semeurs
+
+L'aiguillage décrit ci-dessous n'est pas le point d'entrée. Il est précédé d'un **second
+répartiteur**, en `0x1741`, qui branche sur `[0x0ED0]` — l'effet **demandé** — et non sur `0x0896`,
+l'effet **actif**. C'est le même répartiteur inline `0x4E45` que le conteneur `0x08` reçu, et les
+entrées se lisent de la même façon : `(adresse_hi, adresse_lo, clé)`, terminateur `00 00`, puis
+l'adresse par défaut — ici **`0x1AEA`**, c'est-à-dire *l'aiguillage lui-même*. Un effet sans semeur
+tombe donc directement dans le rendu.
+
+##### Le squelette, identique aux dix-neuf
+
+```asm
+20 21 03        jb  0x21, +3          ; le bit de ressemis est-il pose ?
+02 1a ea        ljmp 0x1AEA           ; non -> aiguillage de rendu, sans rien semer
+c2 21           clr 0x21              ; oui : consommer la demande
+d2 22           setb 0x22             ; autoriser le rendu
+c2 32 / c2 55   clr ...               ; remettre a zero les bits d'etat de l'effet
+12 xx xx        lcall <SEMEUR>        ; propre a l'effet
+90 0d 9d e0     a = [0x0D9D]          ; la VITESSE
+90 xx xx        dptr = <table de periode propre a l'effet>
+02 1a e0        ljmp 0x1AE0           ; movc, puis [0x08BB:0x08BC] = periode, puis aiguillage
+```
+
+Le bit `0x21` est celui que `0x16EC` lève quand l'effet change, et `0x0D9D` est la vitesse. Trois
+faits en découlent, qu'aucune autre partie de cette page ne donnait :
+
+- **le semeur ne tourne qu'une fois par changement d'effet**, pas à chaque trame ;
+- **la période dépend de l'effet ET de la vitesse**, par une table à deux entrées ;
+- **quatre effets ont en plus un travail par trame** avant l'aiguillage (voir plus bas).
+
+##### La table
+
+| Effet | Arm | Bits remis à zéro | Semeur | Table de période |
+| --- | --- | --- | --- | --- |
+| `0x00` | `0x1781` | `0x32`, `0x55` | `0xEDE7(0)` puis `0xEE6A` | — |
+| `0x01` | `0x179A` | `0x55` | `0xEF85` | — |
+| `0x02` | `0x17AC` | `0x32`, `0x55` | `0xEFB8` | index 2 |
+| `0x03` | `0x17C4` | `0x32`, `0x55` | `0xEFB8` | index 3 |
+| `0x04` | `0x17DC` | *(dans le semeur)* | `0xA94A` | index 4 |
+| `0x05` | `0x183D` | `0x55` | `0xEF32` | index 0 |
+| `0x06` | `0x1853` | *(dans le semeur)* | `0xEE62` + `0xA791` | index 5 |
+| `0x07` | `0x1866` | *(dans le semeur)* | `0xA94A` | index 6 |
+| `0x08` | `0x18F3` | *(dans le semeur)* | `0xEE62` + `0xEF4D` | — |
+| `0x0A` | `0x1902` | `0x55`, `0x32` | `0x50E2` | index 8 |
+| `0x0B` | `0x191A` | `0x55`, `0x32` | `0xEFB8` | index 9 |
+| `0x0C` | `0x1932` | `0x55`, `0x32` | `0xEE6A` | index 10 |
+| `0x0D` | `0x19C6` | `0x55`, `0x32` | `0xA846` | index 11 |
+| `0x0F` | `0x1A9D` | `0x32`, `0x55` | **`0xACA3`** — le transposeur | index 12 |
+| `0x10` | `0x1AB4` | `0x32`, `0x55` | `0xEFBE` | index 13 |
+| `0x11` | `0x1ACB` | `0x32`, `0x55` | `0xEF85` | index 14 |
+| `0x20` | `0x19DE` | `0x55` | `0x95A4(0)` | — |
+| `0x26` | `0x19F2` | `0x55` | `0x50E2` | — |
+| `0x2D` | `0x1A04` | — | `0x94E6` | — |
+| *défaut* | `0x1AEA` | — | — | — |
+
+**Les clés `0x09` et `0x0E` sont absentes**, exactement comme les entrées 9 et 14 de la table de
+rendu `0x1B13`. Deux tables indépendantes qui manquent les deux mêmes effets : ces deux emplacements
+sont vides dans le firmware d'usine, ce n'est pas une lacune de lecture.
+
+##### Les tables de période — `CODE 0x2FE9`, quinze tables de cinq octets
+
+Indexées par la vitesse `[0x0D9D]`, de 0 (lente) à 4 (rapide). La période va dans `[0x08BB:0x08BC]`,
+et le gestionnaire de rendu ne travaille que lorsque le tic l'atteint.
+
+| Index | Adresse | Valeurs | Effet |
+| --- | --- | --- | --- |
+| 0 | `0x2FE9` | `120 100 80 50 20` | `0x05` |
+| 1 | `0x2FEE` | `60 50 40 30 20` | **jamais référencée** |
+| 2 | `0x2FF3` | `45 35 25 15 5` | `0x02` |
+| 3 | `0x2FF8` | `45 35 25 15 6` | `0x03` |
+| 4 | `0x2FFD` | `80 60 40 20 8` | `0x04` |
+| 5 | `0x3002` | `20 15 10 5 1` | `0x06` |
+| 6 | `0x3007` | `88 68 48 28 8` | `0x07` |
+| 7 | `0x300C` | `115 100 85 60 30` | **jamais référencée** |
+| 8 | `0x3011` | `120 90 70 45 1` | `0x0A` |
+| 9 | `0x3016` | `30 24 18 12 6` | `0x0B` |
+| 10 | `0x301B` | `32 24 18 16 6` | `0x0C` |
+| 11 | `0x3020` | `115 95 75 55 30` | `0x0D` |
+| 12 | `0x3025` | `32 24 16 8 1` | `0x0F` |
+| 13 | `0x302A` | `46 36 26 16 6` | `0x10` |
+| 14 | `0x302F` | `50 40 30 20 8` | `0x11` |
+
+Une recherche de toutes les charges `mov dptr` visant `0x2FE9`–`0x3033` sur l'image entière donne
+quatorze sites : les treize arms ci-dessus, plus `0xAC25` qui réutilise l'index 0. **Les index 1
+et 7 ne sont chargés nulle part.** Six effets n'ont aucune table (`0x00`, `0x01`, `0x08`, `0x20`,
+`0x26`, `0x2D`) : leur cadence est portée par leur propre moteur.
+
+##### Les quatre arms qui travaillent à chaque trame
+
+`0x04`, `0x07`, `0x0C` et `0x2D` ne se contentent pas de semer. Après la période, et **à chaque
+passage**, ils lisent la dernière touche vue et la projettent sur la grille :
+
+```c
+if ([0x0EE1] == 0) {                       /* une touche est en attente */
+    id = CODE[0xC500 + [0x0EE0]];          /* index de grille col*6+ligne -> id col*8+ligne */
+    [0x0ED1] = id & 7;                     /* ligne */
+    [0x0ED2] = id >> 3;                    /* colonne */
+    ...
+}
+```
+
+C'est la même table `0xC500` dont cette page tire la carte de présence, lue ici pour ce qu'elle est
+vraiment : **une conversion d'index de grille vers l'identifiant d'usine**, `0xFF` pour les six
+emplacements sans touche.
+
+| Arm | Ce qu'il fait de la touche |
+| --- | --- |
+| `0x04` | pose le bit `1 << ligne` dans **deux** cartes : `0x013B + col` et `0x0001 + col` |
+| `0x07` | pose ce bit dans les **quatre** : `0x08C6`, `0x02E8`, `0x013B`, `0x0001`, toutes `+ col` |
+| `0x0C` | teste d'abord le `0xFF`, puis lit `CODE[0x2EED + ligne*21 + col]` et `CODE[0x2F6B + …]` dans `[0x0ED5]`/`[0x0ED6]`, et appelle `0x5114` |
+| `0x2D` | même lecture des deux tables, puis, si les bits `0x44` et `0x43` sont posés, appelle `0x8A1A` avec `[0x0ED5]*6 + 0x17 + [0x0ED6]` |
+
+Les quatre cartes de `0x04` et `0x07` sont exactement celles que cette page attribue à l'automate à
+quatre directions des effets 4, 7 et 13 — **et l'arm `0x07` les alimente toutes les quatre alors que
+l'arm `0x04` n'en alimente que deux**, ce qui distingue enfin deux effets que la table de rendu fait
+pourtant pointer sur le même moteur `0x5BE9`.
+
+Et `0x2EED` réapparaît ici par une voie indépendante, avec son pas de 21 octets par ligne : la base
+corrigée de la table A est confirmée une seconde fois.
+
+##### Ce que le portage pourrait en tirer, et n'en tire pas
+
+`indicators.c` cadence ses animations avec un diviseur inventé, `16 >> led_speed`, et une décroissance
+`4 << led_speed`. Les quinze tables ci-dessus sont la donnée d'usine correspondante — **mesurée, pas
+inférée**. Les reprendre remplacerait une invention par un relevé.
+
+Ce n'est pas fait ici, et pour une raison précise : les treize effets du portage ne sont pas les
+dix-neuf d'usine, la correspondance n'est pas bijective, et brancher des périodes d'usine sur des
+moteurs réécrits changerait le comportement de treize effets qui n'ont jamais tourné. C'est une
+décision de conception, pas une transcription ; elle appartient à qui la demandera.
+
 #### L'aiguillage
 
 ```asm
