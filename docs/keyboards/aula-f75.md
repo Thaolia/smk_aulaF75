@@ -1512,6 +1512,34 @@ Les trois sont recopiées **telles quelles** dans le portage, et la comparaison 
 `0x2D6D + 384 = 0x2EED`, exactement la base de la table A du champ de phase — deux relevés
 indépendants qui se touchent sans recouvrement ni trou.
 
+##### `CODE 0x2D6D` n'a qu'un seul lecteur
+
+Une recherche du motif d'adressage calculé sur l'image entière — `add a,#0x6D` suivi de
+`addc a,#0x2D`, la seule façon d'atteindre cette base — trouve **un site et un seul : `0x8325`**,
+dans le moteur de la vague `0x82A5`. Le portage l'utilise au même endroit, et à aucun autre. Ce
+n'est donc pas une palette générale mais **la roue propre à un effet**.
+
+Le moteur confirme la taille par une seconde voie : il avance la phase par touche avec
+`0xEDA2(phase, 0x80)` — **modulo 128**, exactement le nombre d'entrées de la table. Le portage
+replie avec `& 127`.
+
+Et les trois octets qui séparent les deux roues, `CODE 0x2D6A` = `ff ff ff`, ne sont lus par
+personne : `0x2B2A + 192 × 3 = 0x2D6A`, `0x2D6A + 3 = 0x2D6D`. Un blanc isolé entre les deux tables,
+qu'aucun index modulo 192 ne peut atteindre.
+
+##### Ce que le moteur de la vague fait autour de la palette
+
+`0x82A5` ne peint pas la grille entière. Pour chaque position il lit la **table A** (`CODE 0x2EED`,
+`ligne × 21 + colonne`) et **ne rend que si la valeur est inférieure à quinze**, puis passe encore
+par `rgb_key_suppressed` (`0x598F`) avec la **table B** (`CODE 0x2F6B`). `0x6C9B` fait le même test
+avant d'écrire.
+
+Le portage testait déjà la présence dans ses **semeurs** du plan d'intensité, mais pas dans ses
+chemins **continus** — vague, arc-en-ciel vertical, uni, géométrie de SMK — qui peignaient les six
+emplacements de la grille 6 × 15 ne portant aucune touche, et payaient une recherche de couleur pour
+rien. Le test est maintenant en tête de `led_regen_one()`, à partir de la carte `CODE 0xC500` que
+cette page tient déjà.
+
 ### `XRAM 0x009D` — index d'effet RGB
 
 Vingt sites y accèdent. Trois convergences l'identifient :

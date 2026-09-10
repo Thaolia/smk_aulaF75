@@ -574,7 +574,23 @@ static void led_regen_one(void)
     const uint8_t gain = led_brightness_gain[user_settings.led_brightness];
     uint8_t       rgb[3];
 
-    if (user_settings.led_effect >= AULA_FX_REACTIVE &&
+    /*
+     * SUPPRESSION DES POSITIONS SANS TOUCHE, transcrite du moteur d'usine.
+     *
+     * Les moteurs continus ne peignent pas la grille entière : `0x82A5` lit la
+     * position de la touche dans la table A (`CODE 0x2EED`) et ne rend QUE si
+     * elle est inférieure à quinze, puis passe encore par `rgb_key_suppressed`
+     * (`0x598F`) ; `0x6C9B` fait le même test avant d'écrire. Six des quatre-
+     * vingt-dix emplacements de la grille 6 x 15 ne portent aucune touche, et
+     * cette page les tient de `CODE 0xC500`.
+     *
+     * Les semeurs du plan d'intensité testaient déjà la présence ; les chemins
+     * continus -- vague, arc-en-ciel vertical, uni, géométrie de SMK -- ne le
+     * faisaient pas et payaient une recherche de couleur pour rien.
+     */
+    if ((aula_fx_present(regen_col) & (uint8_t)(1u << regen_row)) == 0) {
+        aula_rgb_set(regen_row, regen_col, 0, 0, 0);
+    } else if (user_settings.led_effect >= AULA_FX_REACTIVE &&
         user_settings.led_effect <= AULA_FX_RIPPLE) {
         /* Les six effets à plan d'intensité : le rendu est le même pour tous,
          * seul le semeur diffère. La décroissance vit ici parce que chaque
