@@ -108,11 +108,19 @@ _Static_assert(FREQ_SYS / 92 > 255000 && FREQ_SYS / 92 < 267000, "FREQ_SYS incom
 #define RF_LEN_REPORT_S  13
 
 /*
- * Drapeau de la commande 0x01. Le firmware d'usine émet 0 à l'entrée dans un
- * mode (`fcn.000084E9`) et 1 depuis le tic lent quand le lien doit être
- * réaffirmé (`fcn.0000870C`, sur le bit 0x2C.5 que pose le raccourci
- * d'appairage). D'où la lecture « 1 = relancer l'appairage » — cohérente, mais
- * non prouvée : seule la différence des deux sites l'établit.
+ * Drapeau de la commande 0x01 : l'octet 2 du fil. Le firmware d'usine émet 0
+ * partout sauf sur un seul chemin, entièrement remonté :
+ *
+ *   clé 0x08 du répartiteur de raccourcis (`0x4136`) -> arm `0x426A`, qui exige
+ *   le transport 2,4 GHz, remet à zéro le compteur d'appui `[0x0961:0x0962]` et
+ *   pose le bit `0x2C.5` ; le tic lent `0x870C` attend que ce compteur 16 bits
+ *   atteigne 3000, puis `0x87BF` émet `rf_link_select(slot, 1)`.
+ *
+ * C'est le MÊME compteur d'appui long que la réinitialisation d'usine (clé
+ * 0x04, bit `0x2B.7`), et les deux bits sont consommés l'un après l'autre dans
+ * le même tic. La lecture « 1 = relancer l'appairage » reste *inférée* -- rien
+ * dans le 8051 ne dit ce que le BK3632 en fait -- mais elle est désormais
+ * adossée à un raccourci dédié, pas à la seule différence de deux sites.
  */
 #define RF_LINK_SELECT  0
 #define RF_LINK_PAIRING 1
@@ -372,15 +380,26 @@ static bool rf_send_short(uint8_t cmd, uint8_t p0, uint8_t p1)
  * Commande 0x01 : le sélecteur de radio. C'est ELLE qui met le module en
  * 2,4 GHz — `fcn.0000ED89`, appelée via `fcn.0000EF5A`.
  *
- *   01 01 <slot> <drapeau> 00 <somme>
+ *   01 01 <drapeau> <slot> 00 <somme>
  *
  * Le slot 0 est le dongle 2,4 GHz, 1 à 3 les trois emplacements Bluetooth.
  * Établi par `fcn.0000870C`, qui choisit `slot = (transport == 2) ? bt_slot : 0`
  * — donc le seul slot possible en mode 1 est 0.
+ *
+ * ⚠️ L'ORDRE DES DEUX OCTETS EST BIEN CELUI-LÀ, et ce fichier l'a longtemps eu
+ * inversé. `fcn.0000ED89` écrit `IDATA[0x35] = R7` puis `IDATA[0x36] = R5` :
+ * l'octet 2 vient de R7, l'octet 3 de R5. Or c'est R5 qui reçoit `bt_slot` sur
+ * les quatre sites qui l'émettent (`0x85D7`, `0x44C0`, `0x87AD`, `0x06E6`),
+ * tandis que R7 vaut 0 partout sauf sur la relance d'appairage, où il vaut 1.
+ *
+ * Ce qui tranche est le superviseur de lien en `0x06E6` : en Bluetooth, quand
+ * l'état reçu ne correspond pas, il redemande avec R5 = `bt_slot` et R7 = 0. Si
+ * R7 portait le slot, le clavier réclamerait le dongle 2,4 GHz à chaque échec de
+ * lien Bluetooth — il changerait de radio pour cause de mauvaise radio.
  */
 static bool rf_send_link(rf_slot_t slot, uint8_t flag)
 {
-    return rf_send_short(RF_CMD_LINK, (uint8_t)slot, flag);
+    return rf_send_short(RF_CMD_LINK, flag, (uint8_t)slot);
 }
 
 /*

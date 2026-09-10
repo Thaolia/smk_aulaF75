@@ -2093,8 +2093,19 @@ sens à son indicateur « connecté » — et c'est pourquoi cet indicateur **re
 Soit sur le fil :
 
 ```
-01 01 <slot> <drapeau> 00 <0x55 - somme>
+01 01 <drapeau> <slot> 00 <0x55 - somme>
 ```
+
+> **Correction.** Cette page a d'abord écrit `01 01 <slot> <drapeau>`. L'ordre est l'inverse, et
+> l'assembleur ci-dessus le dit déjà : `IDATA[0x35] = R7` **puis** `IDATA[0x36] = R5`. Ce qui reçoit
+> `g_bt_slot` est **R5**, sur les quatre sites qui l'émettent — `0x85D7` (entrée Bluetooth), `0x44C0`,
+> `0x87AD`, `0x06E6` (superviseur de lien). R7 vaut `0` partout sauf en `0x87BD`, où il vaut `1`.
+>
+> Ce qui tranche est `0x06E6` : en Bluetooth, quand l'état reçu ne correspond pas au slot attendu, le
+> superviseur redemande avec `R5 = g_bt_slot` et `R7 = 0` (`0x072C` : `ff` = `MOV R7,A` avec `A = 0`).
+> Si R7 portait le slot, le clavier réclamerait le **dongle 2,4 GHz** à chaque échec de lien
+> Bluetooth : il changerait de radio pour cause de mauvaise radio. Le portage émettait dans le mauvais
+> ordre ; c'est corrigé dans `rf_send_link()`.
 
 **Le slot est l'encodage radio, et il ne vaut pas celui de `g_transport`** :
 
@@ -2106,10 +2117,10 @@ Soit sur le fil :
 La preuve tient en trois lignes de `tick_slow_wireless` (`0x870C`) :
 
 ```c
-if (g_transport == 2)      slot = g_bt_slot;
-else if (g_transport == 1) slot = 0;
+if (g_transport == 2)      slot = g_bt_slot;   /* 0x87AD */
+else if (g_transport == 1) slot = 0;           /* 0x87BB */
 else                       /* rien */;
-rf_link_select(slot, 1);
+rf_link_select(slot, 1);                       /* 0x87BF, R7 = 1 */
 ```
 
 En mode 1, le seul slot possible est **0**. Et l'entrée en mode 1 de `fcn.000084E9` appelle
@@ -2128,16 +2139,20 @@ l'appairage » — cohérente avec les deux sites, mais c'est leur seule différ
 Trois actions temporisées, dont deux nouvelles :
 
 - **`0x2B.7`** → réinitialisation d'usine. Le détail complet est plus bas, « L'effacement
-  d'appairages n'existe pas » : ce n'est pas seulement `settings_save` et le retour visuel.
+  d'appairages, mais une relance » : ce n'est pas seulement `settings_save` et le retour visuel.
 - **`0x2C.5`** → réaffirmation du lien, ci-dessus.
 - un compteur d'environ trente-deux passages → **commande `0x04` avec le paramètre 3**.
 
-#### Résolu : l'effacement d'appairages n'existe pas
+#### Résolu : pas d'effacement d'appairages, mais une relance
 
 Cette page a longtemps porté « l'effacement d'appairages » comme point ouvert, avec pour seul
 candidat `fcn.0000929E`, « dont la zone remplie de `0xFF` n'est pas spécifiée ». **Le candidat est
-éliminé, et la réponse est négative** : ce firmware n'efface aucun appairage, parce qu'il n'envoie
-jamais rien au BK3632 qui puisse le faire.
+éliminé, et la question a deux moitiés de réponse** :
+
+- **il n'existe aucun effacement** — ce firmware n'envoie jamais au BK3632 quoi que ce soit qui
+  puisse détruire un lien enregistré ;
+- **il existe une relance d'appairage**, sur un raccourci dédié, et son chemin est maintenant
+  remonté de bout en bout : c'est la commande `0x01` avec son drapeau à `1`.
 
 ##### `fcn.0000929E` est l'initialisation RAM du démarrage
 
@@ -2154,7 +2169,7 @@ Deux déclencheurs posent le bit `0x2B.7`, et le consommateur est `0x8725` dans 
 
 | Déclencheur | Site | Comportement |
 | --- | --- | --- |
-| Raccourci clavier | `0x41BF` pose le bit puis remet le compteur `[0x0961:0x0962]` à zéro | le consommateur exige que ce compteur 16 bits atteigne **3000** : c'est un **appui long** |
+| Raccourci clavier | clé `0x04` -> arm `0x41B3`, `0x41BF` pose le bit puis remet le compteur `[0x0961:0x0962]` à zéro | le consommateur exige que ce compteur 16 bits atteigne **3000** : c'est un **appui long** |
 | Commande reçue | `0x0C53`, atteint par le sous-code **`0x05`** du conteneur `0x08` | pré-charge le compteur à **3001** et pose le bit : réinitialisation **immédiate, pilotée par l'hôte** |
 | Abandon | `0x44AE` efface le bit | touche relâchée trop tôt |
 
@@ -2162,6 +2177,22 @@ Le sous-code `0x05` vient de la table de sauts inline de `0x085B`, lue par le r�
 des triplets *(sous-code, adresse)* — `01→0x09BD`, `02→0x0AAC`, `03→0x0BB0`, `04→0x0C4A`,
 **`05→0x0C53`**, `06→0x0C68`, `09→0x0D10`, puis `41`…`4A`. Le jeu de sous-codes correspond
 exactement à celui que cette page relève côté émission, ce qui valide la lecture de la table.
+
+Ce bit vient du **répartiteur de raccourcis** `0x4136`, un appel au répartiteur inline `0x4E45`
+suivi de dix-sept triplets `(adresse_hi, adresse_lo, clé)` — l'ordre est bien celui-là, et il se
+vérifie sur l'arm de la réinitialisation, dont l'adresse tabulée `0x41B3` tombe exactement sur les
+deux gardes `JNB 0x4D` / `JNB 0x55` qui précèdent le `SETB 0x2B.7` de `0x41BF` :
+
+| Clé | Arm | Rôle |
+| --- | --- | --- |
+| `0x04` | `0x41B3` | **réinitialisation d'usine** — pose `0x2B.7` |
+| `0x05` `0x06` `0x07` | `0x41C8` `0x41FE` `0x4233` | emplacements Bluetooth **1**, **2**, **3** (`g_transport = 2`, `g_bt_slot = 1/2/3`) |
+| `0x08` | `0x426A` | **relance d'appairage** — pose `0x2C.5` |
+| `0x00` `0x01` `0x02` `0x0A` `0x0B` `0x11` `0x18`–`0x1D` | `0x4170` … `0x43D5` | autres raccourcis |
+
+Les trois arms Bluetooth se lisent d'un coup d'œil : chacun écrit `g_transport = 2` avec `A = 2`,
+puis réutilise ce même `A` pour le slot — `14` (`DEC A`) pour l'emplacement 1, rien pour le 2, `04`
+(`INC A`) pour le 3.
 
 Et voici la séquence complète, `0x8728`–`0x8799`, **ses dix-huit appels énumérés** :
 
@@ -2179,6 +2210,39 @@ Puis `CLR 0x1B` (rétroéclairage éteint), `SETB 0x51` et `SETB 0x21` (recharge
 **Aucun de ces dix-huit appels ne touche l'EUART0.** Pas une trame, pas une entrée dans la file
 d'émission. C'est une réinitialisation de **disposition et d'éclairage**, pas d'appairages.
 
+##### La seconde moitié du même tic : la relance d'appairage
+
+`0x8725` teste `0x2B.7` et, **s'il est absent, saute directement en `0x8799`** — c'est-à-dire dans
+la suite du tic, pas hors de lui. Or `0x8799` teste `0x2C.5`. Les deux raccourcis partagent donc le
+compteur d'appui long **et** le tic qui les consomme, dans cet ordre :
+
+```asm
+0x870C  si [0x0961:0x0962] < 3000 -> 0x87F6      ; l'appui long n'est pas atteint
+0x8721  compteur = 0
+0x8725  jnb 0x2b.7, 0x8799                       ; pas de reinitialisation -> on tente l'appairage
+0x8728  ...  reinitialisation d'usine ...
+0x8793  clr 0x2c.5                               ; <-- et elle ANNULE l'appairage en attente
+0x8799  jnb 0x2c.5, 0x87C2
+0x879C  [0x0E3B] = 0 ; clr 0x2c.5 ; delai 20 ms
+0x87A6  si g_transport == 2 -> R5 = g_bt_slot
+0x87B4  sinon si g_transport == 1 -> R5 = 0
+0x87BD  R7 = 1
+0x87BF  lcall 0xEF5A                             ; 01 01 01 <slot> 00 <somme>
+```
+
+L'arm `0x426A` qui pose `0x2C.5` **exige `g_transport == 1`**, c'est-à-dire le 2,4 GHz. En pratique
+la seule trame émise par ce chemin est donc `01 01 01 00 00 <somme>` : *relance l'appairage avec le
+dongle*. Le `CLR 0x2C.5` de `0x8793` dit le reste — quand les deux bits sont posés, la
+réinitialisation gagne et l'appairage est abandonné, pas mis en file.
+
+Un second consommateur de `0x2C.5` existe, en `0x44BD`, et il émet `R7 = 0` : une simple
+reconnexion. Il exige `g_transport == 2` alors que le seul poseur du bit exige `g_transport == 1` —
+il est donc inatteignable sans changement de transport entre la pose et la lecture. Noté, pas
+expliqué.
+
+`0xEF5A` n'est d'ailleurs pas qu'un émetteur : après `0xED89` il efface le bit `0x69` et recharge
+`IDATA[0x18] = 6`, `IDATA[0x17] = 0xFF` — le superviseur de lien repart à neuf.
+
 ##### Pourquoi le négatif est solide
 
 Les appairages vivent dans le BK3632, pas dans le SH68F90 : les effacer demanderait une commande sur
@@ -2189,15 +2253,24 @@ nul. Les codes `0x05`, `0x07` et `0x0A` ne sont **jamais** émis. Et les sous-op
 `0x08` (`0x05`, `0x0A`, `0x41`–`0x44`, `0x49`, `0x4A`) sont tous des transferts de données depuis
 `CODE` ou la zone IAP.
 
-Il ne reste donc aucune commande candidate. Le portage avait choisi de **ne pas inventer** de
-commande d'effacement ; ce n'était pas seulement prudent, c'était juste.
+Il ne reste donc aucune commande candidate **pour effacer**. Le portage avait choisi de **ne pas
+inventer** de commande d'effacement ; ce n'était pas seulement prudent, c'était juste. La seule
+action d'appairage que ce firmware sache faire est la relance ci-dessus, et elle passe par une
+commande que le portage émet déjà.
 
 ##### Ce que le portage pourrait reprendre, et ne reprend pas
 
 La réinitialisation d'usine elle-même est portable — SMK a déjà `settings`, `indicators_apply_defaults()`
 et une disposition par défaut compilée. Ce serait une **fonctionnalité nouvelle**, pas la réponse à
-la question posée, et elle n'est pas ajoutée ici. La seule chose à retenir côté code est négative et
-déjà en place : il n'y a pas de commande d'effacement d'appairages à porter.
+la question posée, et elle n'est pas ajoutée ici.
+
+Côté code, il reste deux choses, et une seule a demandé une modification :
+
+- **rien à porter pour l'effacement** — il n'existe pas ;
+- **la relance existe déjà** dans `aula_rf.c` sous le nom `RF_LINK_PAIRING`, mais elle partait avec
+  les deux octets inversés. C'est corrigé : `rf_send_link()` place désormais le drapeau en octet 2 et
+  le slot en octet 3. Le défaut était sans effet en 2,4 GHz, où les deux valent zéro ; en Bluetooth il
+  faisait partir `01 01 <slot> 00`, soit une demande de dongle assortie d'un drapeau parasite.
 
 #### Résolu : `0x031B` est un champ d'un bloc de réglages persisté
 
