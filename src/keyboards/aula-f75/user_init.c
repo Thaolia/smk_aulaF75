@@ -2,6 +2,7 @@
 #include "user_init.h"
 #include "pwm.h"
 #include "user_matrix.h"
+#include "aula_rgb.h"
 #include "gpio.h"
 
 /*
@@ -46,10 +47,49 @@ void user_gpio_init(void)
     user_matrix_cols_deselect_all();
 }
 
+/*
+ * Les 18 canaux du rétroéclairage : trois bancs de six, période et DUTY1
+ * communs. La période 0x04B0 est celle du firmware d'usine (PWM0PERDH/L lus en
+ * 0x6707 et 0x670D) ; DUTY1 suit la polarité choisie dans `aula_rgb.h`.
+ *
+ * Les bancs ne sont PAS activés ici : c'est `indicators_pwm_enable()` qui pose
+ * `PWM_MODE_ENABLE`, et `indicators_pwm_disable()` qui le retire avant chaque
+ * balayage de matrice. Allumer ici laisserait les LED conduire pendant le
+ * premier scan, avant que le moteur de rendu n'ait écrit quoi que ce soit.
+ */
 void user_pwm_init(void)
 {
-    /* Rien : ce portage n'a pas de rendu RGB. Laisser les 18 canaux PWM au
-     * repos plutôt que de les activer sans savoir quoi y écrire. */
+    const uint8_t perdh = (uint8_t)(AULA_RGB_PERIOD >> 8);
+    const uint8_t perdl = (uint8_t)(AULA_RGB_PERIOD);
+
+    PWM0PERDH = perdh;
+    PWM0PERDL = perdl;
+    PWM1PERDH = perdh;
+    PWM1PERDL = perdl;
+    PWM2PERDH = perdh;
+    PWM2PERDL = perdl;
+
+    /* DUTY2 part sur « éteint », qui vaut aula_rgb_duty(0). */
+    SET_PWM_DUTY(PWM00, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM01, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM02, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM03, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM04, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM05, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM10, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM11, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM12, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM13, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM14, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM15, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM20, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM21, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM22, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM23, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM24, AULA_RGB_DUTY1, aula_rgb_duty(0));
+    SET_PWM_DUTY(PWM25, AULA_RGB_DUTY1, aula_rgb_duty(0));
+
+    aula_rgb_clear();
 }
 
 void user_init(void)

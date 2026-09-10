@@ -34,20 +34,47 @@ void kb_update_switches(void)
 {
 }
 
+extern void indicators_next_effect(void);
+extern void indicators_prev_effect(void);
+extern void indicators_brightness_up(void);
+extern void indicators_brightness_down(void);
+extern void indicators_speed_up(void);
+extern void indicators_speed_down(void);
+
 /*
  * Les keycodes LNK_BT1..3 ne choisissent que l'emplacement Bluetooth : le
  * transport, lui, vient de la glissière. Appuyer sur l'emplacement déjà actif
  * relance l'appairage, comme le raccourci d'usine qui pose le bit 0x2C.5.
  *
- * Les keycodes RGB (FX_NEXT, BRI_UP...) sont volontairement absents : le moteur
- * de rendu n'est pas encore porté (`pwm_interrupt_handler` est un talon), et une
- * touche qui appelle un talon vaut moins qu'une touche qui ne fait rien.
+ * Les six keycodes RGB étaient posés dans la keymap depuis le début sans que
+ * rien ne les traite : ni ce fichier ni `layout_process_record` ne les
+ * reconnaissaient, et ils tombaient dans `send_keycode()` où aucun prédicat ne
+ * les prend. Ils appellent maintenant le moteur de rendu.
  */
 bool kb_process_record(uint16_t keycode, bool key_pressed)
 {
     uint8_t slot;
 
     switch (keycode) {
+        case FX_NEXT:
+            if (key_pressed) indicators_next_effect();
+            return false;
+        case FX_PREV:
+            if (key_pressed) indicators_prev_effect();
+            return false;
+        case BRI_UP:
+            if (key_pressed) indicators_brightness_up();
+            return false;
+        case BRI_DN:
+            if (key_pressed) indicators_brightness_down();
+            return false;
+        case SPD_UP:
+            if (key_pressed) indicators_speed_up();
+            return false;
+        case SPD_DN:
+            if (key_pressed) indicators_speed_down();
+            return false;
+
         case LNK_BT1:
             slot = 1;
             break;

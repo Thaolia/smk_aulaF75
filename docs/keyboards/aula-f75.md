@@ -67,7 +67,7 @@ n'en peuple que 15. C'est bien **15** colonnes physiques.
 | Correspondance matrice de touches ↔ grille LED | ✅ **vérifiée** par capture HID indépendante — voir ci-dessous |
 | Ordre de chargement des 18 canaux PWM | ✅ **relevé et implémenté** (`aula_rgb.c`) |
 | Correspondance canal ↔ (ligne, couleur) | ✅ **établie via le driver OpenRGB** |
-| Câblage du rendu dans la boucle SMK | ❌ inadéquation d'architecture, voir ci-dessous |
+| Câblage du rendu dans la boucle SMK | ✅ **résolu** — sous-trames LED de `tick.c`, voir ci-dessous |
 | Rotation d'encodeur | ❌ non implémentée (phases identifiées : `P0.5` / `P0.6`) |
 | Broches au rôle inconnu | ❓ `P0.0` `P0.1` `P4.1` `P4.4` `P5.5` `P5.6` `P7.7` — `P7.4`/`P4.5` sont le sélecteur de connexion, `P4.7` la ligne « module prêt » |
 | Veille | ✅ **implémentée** — transcrite du firmware d'usine, non testée sur matériel |
@@ -162,16 +162,59 @@ Reste une inférence : que le firmware range les octets reçus sans les permuter
 l'implémentation naturelle, et le fait que la permutation vive dans la table de registres plutôt
 que dans les données va dans ce sens. À confirmer sur matériel en n'allumant qu'une voie.
 
-### Inadéquation d'architecture avec SMK
+### L'inadéquation d'architecture avec SMK — levée
 
 Le rendu par colonne exige de recharger les 18 duties **à chaque avance de colonne**. Dans le
 firmware d'usine, c'est l'ISR `_INT_PWM0` qui possède l'avance de colonne — et qui en profite pour
 lire les lignes de la matrice au passage (`0x73A6`).
 
-SMK est bâti pour la topologie inverse : `src/smk/matrix.c` possède sa propre boucle de colonnes,
-et `pwm_interrupt_handler` n'est qu'un **stub vide**. Faire cohabiter les deux demande un choix
-d'architecture — soit l'ISR reprend la main sur les colonnes comme en usine, soit le rechargement
-se greffe dans la boucle de scan — et ce choix ne se valide pas sans matériel.
+Cette page a longtemps conclu qu'il fallait choisir entre « l'ISR reprend la main sur les colonnes
+comme en usine » et « le rechargement se greffe dans la boucle de scan », et que ce choix ne se
+validait pas sans matériel. **Les deux branches étaient fausses, et l'ordonnanceur qu'il fallait
+existait déjà dans SMK.**
+
+`src/smk/tick.c` alterne, depuis l'ISR Timer2, **un balayage de matrice** puis
+`LED_SUBFRAMES_PER_SCAN` **sous-trames LED** :
+
+```c
+void tick_dispatch(void) {
+    if (scan_due) { scan_due = false; subframes_since_scan = 0; run_matrix_scan(); return; }
+    run_led_subframe();
+    if (++subframes_since_scan >= LED_SUBFRAMES_PER_SCAN) scan_due = true;
+}
+```
+
+Le portage pose `LED_SUBFRAMES_PER_SCAN = MATRIX_COLS` : quinze sous-trames, une par colonne LED,
+entre deux balayages de touches. Le rendu ne se greffe donc pas *dans* le scan — il vit à côté,
+dans le créneau que `tick.c` lui réserve (`RELOAD_LED_SUBFRAME` = 400 µs contre ~320 µs de
+balayage). `matrix.c` n'est pas touché d'une ligne, et `pwm_interrupt_handler` reste vide.
+
+La cohabitation électrique, elle, était déjà résolue : `matrix_scan_full()` encadre son balayage
+par `indicators_pwm_disable()` et `indicators_pwm_enable()` **parce que le courant des LED se
+couple dans la détection de ligne**. Il suffisait d'implémenter les deux.
+
+Un précédent existait dans l'arbre et n'avait pas été vu : le **genesis-thor-300** partage lui aussi
+ses colonnes de matrice avec son multiplexage LED, pose `LED_SUBFRAMES_PER_SCAN MATRIX_COLS`, et
+mesure son budget — *« one effect evaluation per subframe: six, one per row, does not fit and
+starves the USB interrupt »*. Le portage reprend sa structure, une seule évaluation d'effet par
+sous-trame, en remplaçant son tramage de trames entières par du vrai PWM.
+
+#### Ce qui reste non vérifiable : la polarité
+
+L'arithmétique de conversion du firmware d'usine n'est **pas** localisée — rien ne relie son tampon
+de 8 bits par canal en `0x0152` aux 36 octets par colonne que `fcn @ 0x6E61` lit en `0x05A2`, et sa
+valeur de `DUTY1` est inconnue. Deux lectures restent cohérentes :
+
+| | Rapport cyclique | `DUTY1` | Précédent dans SMK |
+| --- | --- | --- | --- |
+| Inversé | `PERIOD − v×PERIOD/255` | `PERIOD` | eyooso-z11 |
+| Direct | `v×PERIOD/255` | `0` | NuPhy Air60 (« Do NOT invert ») |
+
+Un indice de chaque côté : la présente page conclut « anode commune, le PWM fait office de sink »,
+ce qui va vers l'inversion ; mais `user_matrix_sinks_off()` du portage tire les 18 broches **au
+niveau bas** pour éteindre, ce qui va vers le sens direct. Le portage retient l'inversion et
+concentre le choix dans **une seule constante**, `AULA_RGB_DUTY_INVERTED` (`aula_rgb.h`) : si le
+rétroéclairage s'allume à l'envers, c'est la seule ligne à changer.
 
 ### Ce qui est établi côté PWM
 

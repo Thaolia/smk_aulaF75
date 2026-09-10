@@ -116,25 +116,23 @@
 /* Rétroéclairage : 18 sorties PWM = 6 lignes physiques de LED x R/G/B.
  * Confirmé par P1CR=P2CR=P3CR=0x3F (les 18 broches PWM en sortie).
  * Correspondance MCU déduite du NuPhy Air60 : PWM0x<->P3_x, PWM1x<->P2_x,
- * PWM2x<->P1_x. Les colonnes de matrice servent de sélecteurs de multiplexage. */
-#define LED_PWM_C0  PWM00
-#define LED_PWM_C1  PWM01
-#define LED_PWM_C2  PWM02
-#define LED_PWM_C3  PWM03
-#define LED_PWM_C4  PWM04
-#define LED_PWM_C5  PWM05
-#define LED_PWM_C6  PWM10
-#define LED_PWM_C7  PWM11
-#define LED_PWM_C8  PWM12
-#define LED_PWM_C9  PWM13
-#define LED_PWM_C10 PWM14
-#define LED_PWM_C11 PWM15
-#define LED_PWM_C12 PWM20
-#define LED_PWM_C13 PWM21
-#define LED_PWM_C14 PWM22
-#define LED_PWM_C15 PWM23
-#define LED_PWM_C16 PWM24
-#define LED_PWM_C17 PWM25
+ * PWM2x<->P1_x. Les colonnes de matrice servent de sélecteurs de multiplexage.
+ *
+ * Il n'y a PAS de macros LED_PWM_Cn ici, contrairement aux autres claviers de
+ * SMK : chez eux un canal PWM pilote une colonne LED, ici il pilote une
+ * (ligne, couleur). La correspondance canal -> registre vit en un seul endroit,
+ * `aula_rgb_load_column()`, dans l'ordre de chargement du firmware d'usine --
+ * qui n'est pas l'ordre naturel des numéros de canal. Une seconde table avec
+ * une autre origine d'index n'aurait servi qu'à se contredire.
+ *
+ * Un balayage LED complet -- les quinze colonnes -- entre deux balayages de
+ * matrice, comme le genesis-thor-300, seul autre clavier de SMK à partager ses
+ * colonnes entre le scan et le multiplexage LED. */
+#define LED_SUBFRAMES_PER_SCAN MATRIX_COLS
+
+/* Dix crans de luminosité : la table de gain d'usine en CODE 0x2937 en compte
+ * dix (00 08 10 18 20 28 32 3c 46 50), bornée par CODE[0xA8D5+effet] = 9. */
+#define LED_BRIGHTNESS_LEVELS 10
 
 /* -------------------------------------------------------------------------
  * Liaison sans fil

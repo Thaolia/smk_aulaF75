@@ -79,7 +79,13 @@ static AULA_RGB_XDATA uint16_t duty_cache[AULA_RGB_COLS][AULA_RGB_CHANNELS];
  */
 uint16_t aula_rgb_duty(uint8_t value)
 {
-    return (uint16_t)(AULA_RGB_PERIOD - (uint16_t)(((uint16_t)value * 75u) >> 4));
+    const uint16_t scaled = (uint16_t)(((uint16_t)value * 75u) >> 4);
+
+#if AULA_RGB_DUTY_INVERTED
+    return (uint16_t)(AULA_RGB_PERIOD - scaled);
+#else
+    return scaled;
+#endif
 }
 
 void aula_rgb_clear(void)
