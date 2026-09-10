@@ -2439,6 +2439,9 @@ Valeur dans le dump : **4**, soit le maximum.
 
 ##### `XRAM 0x0896` — l'effet dont on lit la palette (23 références)
 
+> **Son unique écrivain est identifié** : `0x16EC`, le verrou de changement d'effet. Voir plus bas,
+> « L'écrivain de `0x0896` — c'est un verrou, pas une variable libre ».
+
 Les fonctions de rendu font `0xC800 + [0x0896] × 21`. Les valeurs auxquelles `0x0896` est comparé
 sont parlantes : `xrl a,#0x0d` (`0x5E0C`, `0x6630`), `cjne a,#0x0A` (`0xA3F7`, `0xA42D`),
 `xrl a,#0x01` (`0x7476`), et `add a,#0xE0` — c'est-à-dire une comparaison à `0x20`. **Ce sont les
@@ -2458,6 +2461,78 @@ Les quinze effets de la famille A portent chacun leur palette de sept couleurs, 
 sur la palette d'usine ; ceux de la famille B sont à zéro — ils n'utilisent pas de palette, ce qui
 est cohérent avec leur maximum de couleur plus bas (4 au lieu de 7). Les adresses tombent
 entièrement dans les pages 100 et 101 de la zone IAP.
+
+##### L'écrivain de `0x0896` — c'est un verrou, pas une variable libre
+
+Cette page a longtemps porté « l'écrivain de `XRAM 0x0896` » comme point ouvert, en relevant que
+l'aiguillage d'animation branche sur `0x0896` **et non** sur `0x009D`. Les deux questions n'en font
+qu'une, et la réponse les règle ensemble.
+
+Sur les **23 références** à `0x0896`, **une seule est une écriture** : `0x16EC`.
+
+```
+16A6  jb   0x51, 0x16D7            ; deja marque « a recharger »
+16A9  mov  dptr,#0x0ED0 ; movx a,@dptr ; mov r6,a
+16AE  mov  dptr,#0x0896 ; movx a,@dptr
+16B2  cjne a,r6,   0x16D7          ; l'effet a-t-il change ?
+16B5  mov  dptr,#0x0897 ; movx a,@dptr
+16B9  cjne a,r7,   0x16D7          ; et le second parametre ?
+...                                 ; idem 0x0ED3/0x09AF (luminosite) et 0x0ED4/0x0306 (vitesse)
+16D4  ljmp 0x1AEA                  ; rien n'a bouge -> rendu normal
+16D7  clr  0x51
+16DE  mov  dptr,#0x0896 ; movx a,@dptr ; cjne a,r6, 0x16EC
+16E5  mov  dptr,#0x0897 ; movx a,@dptr ; xrl a,r7 ; jz 0x1702
+16EC  mov  dptr,#0x0896 ; mov a,r6 ; movx @dptr,a    <== L'UNIQUE ECRITURE
+16F1  mov  dptr,#0x0897 ; mov a,r7 ; movx @dptr,a
+16F6  setb 0x21                    ; ressemis du plan par effet
+16F8  clr  0x22
+16FC  lcall 0xEDE7
+16FF  lcall 0xEE6A                 ; et on efface le panneau
+```
+
+C'est un **comparateur-verrou** : il ne recopie que si la valeur a changé, et le changement
+déclenche deux choses — le bit `0x21`, qui commande le ressemis du plan par effet (c'est lui que
+`0x1A9E` teste avant d'appeler le transposeur `0xACA3`), et l'effacement complet du panneau.
+
+**Et la source, c'est bien `0x009D`.** Trente octets plus haut :
+
+```
+160D  mov dptr,#0x009D ; movx a,@dptr
+1611  mov dptr,#0x0ED0 ; movx @dptr,a     ; [0x0ED0] = [0x009D]
+1615  ... [0x0ED3] = [0x0D19] (luminosite), [0x0ED4] = [0x0D9D] (vitesse)
+162A  jnb 0x1B, +5 : [0x0ED0] = 0
+1632  jnb 0x6C, +5 : [0x0ED0] = 0
+163A  jnb 0x5B, +5 : [0x0ED0] = 0
+```
+
+D'où la chaîne complète, en quatre temps :
+
+> **`0x009D`** (effet *choisi*, réglage persistant, douze écrivains dont les raccourcis qui posent
+> `0x20`, `0x26` et `0x2D`) **→ `0x0ED0`** (effet *demandé*, recopié à chaque tour) **→ trois portes**
+> qui le forcent à 0 **→ `0x0896`** (effet *actif*, verrouillé au changement).
+
+Les trois portes sont des bits d'état, et ils expliquent pourquoi la valeur effective peut différer
+du réglage :
+
+| Bit | Rôle | Écrivains |
+| --- | --- | --- |
+| `0x1B` (`0x23.3`) | **rétroéclairage allumé** | basculé par un raccourci (`b2 1b` en `0x42AC`, suivi du marquage « réglages modifiés »), effacé à l'endormissement sans fil (`0x8797`), reposé au réveil (`0x8816`) |
+| `0x6C` (`0x2D.4`) | le bit qui coupe l'USB, déjà documenté plus bas — **seul écrivain : `fcn.00001DC3`**, le gestionnaire d'énergie | `0x1F25` / `0x1EF5`, `0x1F50` |
+| `0x5B` (`0x2B.3`) | second bit d'énergie, écrit dans la même fonction | `0x1F8E` / `0x1EF7`, `0x1F52`, `0x7EBF` |
+
+**Voilà pourquoi l'aiguillage lit `0x0896` et pas `0x009D`** : `0x009D` est ce que l'utilisateur a
+choisi, `0x0896` est ce qui doit réellement s'afficher une fois passées les portes d'énergie et
+l'interrupteur de rétroéclairage. Ce n'était pas une variable orpheline, c'était le verrou de sortie
+d'un comparateur.
+
+##### Ce que ça change pour le portage : rien, et c'est en soi un résultat
+
+Le portage recalcule à chaque passage depuis `user_settings.led_effect`, et `fx_reset()` — appelé à
+chaque changement d'effet — joue exactement le rôle du couple `SETB 0x21` + `LCALL 0xEE6A`
+(ressemis de l'état des semeurs, puis `aula_rgb_clear()`). Les trois portes ont leurs équivalents
+ailleurs dans SMK : l'extinction est l'effet `AULA_FX_OFF`, et la veille passe déjà par
+`indicators_pwm_disable()` depuis `sleep.c` et `user_sleep_prepare()`. Aucune ligne à ajouter — la
+convergence est vérifiée, pas supposée.
 
 ##### L'offset 5 est l'aiguillage global / par effet
 
