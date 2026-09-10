@@ -2170,13 +2170,24 @@ Deux déclencheurs posent le bit `0x2B.7`, et le consommateur est `0x8725` dans 
 | Déclencheur | Site | Comportement |
 | --- | --- | --- |
 | Raccourci clavier | clé `0x04` -> arm `0x41B3`, `0x41BF` pose le bit puis remet le compteur `[0x0961:0x0962]` à zéro | le consommateur exige que ce compteur 16 bits atteigne **3000** : c'est un **appui long** |
-| Commande reçue | `0x0C53`, atteint par le sous-code **`0x05`** du conteneur `0x08` | pré-charge le compteur à **3001** et pose le bit : réinitialisation **immédiate, pilotée par l'hôte** |
+| Commande reçue | `0x0C53`, atteint par le sous-code **`0x06`** du conteneur `0x08` | pré-charge le compteur à **3001**, force le prédiviseur `[0x08DB]` à **10** et pose le bit : réinitialisation **immédiate, pilotée par l'hôte** |
 | Abandon | `0x44AE` efface le bit | touche relâchée trop tôt |
 
-Le sous-code `0x05` vient de la table de sauts inline de `0x085B`, lue par le répartiteur `0x4E45` :
-des triplets *(sous-code, adresse)* — `01→0x09BD`, `02→0x0AAC`, `03→0x0BB0`, `04→0x0C4A`,
-**`05→0x0C53`**, `06→0x0C68`, `09→0x0D10`, puis `41`…`4A`. Le jeu de sous-codes correspond
-exactement à celui que cette page relève côté émission, ce qui valide la lecture de la table.
+> **Correction.** Cette page a d'abord écrit « sous-code `0x05` », en parsant la table inline de
+> `0x0859` comme des triplets *(clé, adresse)*. C'est l'inverse — voir « Les treize arms du conteneur
+> `0x08` reçu » plus bas : le répartiteur `0x4E45` lit *(adresse_hi, adresse_lo, clé)*, la clé en
+> **dernier**. Toutes les clés de cette table étaient donc décalées d'un cran. Le déclencheur de
+> `0x0C53` est **`0x06`**, et `0x05` arme un tout autre arm (`0x0C4A`, une lecture).
+>
+> La justification donnée à l'époque — « le jeu de sous-codes correspond exactement à celui que cette
+> page relève côté émission » — était fausse et est retirée : les treize sous-codes **reçus**
+> (`01`–`06`, `09`, `41`–`44`, `49`, `4A`) ne sont pas le jeu **émis** (`05`, `0A`, `41`–`44`, `49`,
+> `4A`). Ils se recoupent sans coïncider.
+
+Le prédiviseur `[0x08DB]` est ce qui rend la chose *immédiate* : `tick_slow` (`0x8FA7`) ne fait son
+travail que lorsque `[0x08DB]` atteint **10**, et `0x819C` ne l'incrémente que d'un par tic. Le poser
+à 10 fait passer la garde au tic suivant, au lieu d'attendre dix tics. C'est le pendant du compteur
+pré-chargé à 3001 : l'un supprime l'appui long, l'autre supprime l'attente.
 
 Ce bit vient du **répartiteur de raccourcis** `0x4136`, un appel au répartiteur inline `0x4E45`
 suivi de dix-sept triplets `(adresse_hi, adresse_lo, clé)` — l'ordre est bien celui-là, et il se
@@ -3642,6 +3653,108 @@ contenu de sa flash de configuration.
 C'est le **pendant en lecture** du transfert fragmenté déjà identifié en réception (trame `0x08`,
 sous-index 1, vers `g_settings_staging`). La liaison radio porte un protocole de lecture *et*
 d'écriture sur la zone de configuration, par blocs de 14 octets, avec numéro de séquence.
+
+#### Les treize arms du conteneur `0x08` reçu
+
+`euart0_parse` aiguille les trames `0x08` reçues par un appel au répartiteur inline `0x4E45`, en
+`0x0856`. Le répartiteur se lit d'un bloc :
+
+```asm
+0x4E45  pop DPH ; pop DPL          ; DPTR = adresse de retour = debut des donnees inline
+0x4E49  mov R0,A                   ; R0 = la cle cherchee
+0x4E4B  movc a,@a+dptr             ; hi
+0x4E4C  jnz 0x4E60                 ; entree valide -> comparer
+0x4E50  movc a,@a+dptr (offset 1)  ; lo
+0x4E51  jnz 0x4E60
+0x4E53  inc dptr ; inc dptr        ; hi == lo == 0 : fin de table, l'adresse par defaut suit
+0x4E55  <charger hi/lo dans DPTR et jmp @a+dptr>
+0x4E60  movc a,@a+dptr (offset 2)  ; la CLE
+0x4E63  xrl a,R0 ; jz 0x4E55       ; trouvee -> sauter a l'adresse de CETTE entree
+0x4E66  inc dptr x3 ; sjmp 0x4E4A  ; entree suivante
+```
+
+**Les entrées sont `(adresse_hi, adresse_lo, clé)` — la clé en dernier**, la table se termine par une
+adresse `00 00`, et l'adresse par défaut suit le terminateur. Ce format vaut pour les **quatre**
+sites d'appel de `0x4E45` de l'image : `0x0856` (13 entrées, défaut `0x0F6A`), `0x1741` (19 entrées,
+défaut `0x1AEA` — les effets), `0x4136` (17 entrées, défaut `0x44F5` — les raccourcis) et `0x8845`
+(9 entrées, défaut `0x8919`).
+
+Deux recoupements indépendants ferment la lecture. L'arm `0x0C4A` se termine par `ljmp 0x0F6A`,
+c'est-à-dire **l'adresse par défaut de sa propre table** ; et les sept opcodes que cette page avait
+déjà déduits par une recherche d'octets sur `90 0d 9e` (`0x05` en `0x0C4A`, puis `0x41`…`0x4A`)
+tombent exactement sur les clés que ce parse donne.
+
+##### La table
+
+| Clé | Arm | Sens | Rôle |
+| --- | --- | --- | --- |
+| `0x01` | `0x0884` | écriture | profil de **remap** — base `CODE` selon le sous-index `[0x038D]` : `0`→`0xCC00`, `1`→`0xD000`, `2`→`0xD400`, `3`→`0xD800` |
+| `0x02` | `0x09BD` | écriture | profil d'**éclairage par touche** — base `0xCA00`, sous-index `0` seulement ; **pas d'écriture flash** |
+| `0x03` | `0x0AAC` | écriture | huit profils — bases `0xDC00`, `0xDE00`, `0xE000`, `0xE200`, `0xE400`, `0xE600`, `0xE800`, `0xEA00` |
+| `0x04` | `0x0BB0` | écriture | bloc de **réglages** — page fixe, validation par `0xEEF4` |
+| `0x05` | `0x0C4A` | lecture | arme le handler **1** dans `[0x0D9E]` (gabarit `0xB3DC`) |
+| **`0x06`** | `0x0C53` | action | **réinitialisation d'usine immédiate** |
+| `0x09` | `0x0C68` | écriture | base fixe `0xC800` |
+| `0x41` | `0x0D10` | lecture | handler 2 — 36 blocs × 14 = **504 o** |
+| `0x42` | `0x0D2B` | lecture | handler 3 — 27 × 14 = **378 o** (la table de couleurs) |
+| `0x43` | `0x0D45` | lecture | handler 4 — 37 × 14 = **518 o** |
+| `0x44` | `0x0D5F` | lecture | handler 5 — 10 × 14 = **140 o** |
+| `0x49` | `0x0D79` | lecture | handler 6 — 35 × 14 = **490 o** |
+| `0x4A` | `0x0D93` | lecture | handler 7 — 1 bloc de **2 o** ; force aussi `[0x08DB] = 10` |
+| — | `0x0F6A` | — | **défaut** : sortie du parser, sans effet |
+
+##### Le squelette commun des cinq arms d'écriture
+
+`0x0884`, `0x09BD`, `0x0AAC`, `0x0BB0` et `0x0C68` sont le même corps, à la base et à la validation
+près :
+
+```c
+if (sub_index_selectionne)                  /* [0x038D] choisit une base CODE */
+    { [0x0139:0x013A] = base; }
+
+if ([0x0D14] == 0)                          /* premier bloc de la sequence */
+    memcpy_code(0x09BF, base, 512);         /* amorcer le tampon avec la page actuelle */
+
+[0x0139:0x013A] = [0x0D14] * 14;            /* decalage = numero de sequence x 14 */
+memcpy(0x09BF + decalage, 0x0126, [0x038E:0x038F]);   /* le bloc recu */
+
+if ([0x0D14] == [0x02E2])                   /* dernier bloc -> valider */
+    <validation propre a l'arm>;
+
+for (i = 2; i < 0x16; i++)                  /* accuse : la requete renvoyee telle quelle */
+    IDATA[0x33 + i] = XRAM[0x011F + i];
+euart0_cmd08(...);
+if (!filaire) { P0CR &= 0xFB; P0.2 = 1; }   /* relacher le handshake d'emission */
+```
+
+L'amorçage est ce qui rend le protocole sûr : le tampon de 512 octets en `XRAM 0x09BF` est d'abord
+rempli avec **le contenu actuel de la page**, et seuls les octets effectivement transmis l'écrasent.
+Un transfert partiel ne détruit donc pas le reste de la page. Les arms `0x03` et `0x04` n'amorcent
+pas — ils réécrivent la page entière.
+
+La validation diffère :
+
+| Arm | Validation |
+| --- | --- |
+| `0x01`, `0x03`, `0x09` | `0xEE4E` → `iap_save(page = base_hi >> 1)` → `0xAAC1`, **le même graveur de page IAP que la réinitialisation d'usine** |
+| `0x02` | **aucune écriture flash** : pose le bit `0x2C.7`, écrit `[0x0E24] = 0x20 + [0x038D]` puis appelle `0xAF99` — soit *bascule sur l'effet `0x20 + sous-index`*. Les clés `0x20`, `0x26` et `0x2D` de la table d'effets `0x1744` sont exactement ces effets-là |
+| `0x04` | `0xEEF4`, qui déroule l'IAP à la main : `EA = 0`, `matrix_cols_release(99)`, `iap_erase(99)`, `iap_write_page(src = 0x09BF, dst = 0xC600, 512)`, `iap_lock()`, `EA` restauré |
+
+`page = base_hi >> 1` place toutes ces destinations dans la plage **99–117** que cette page a
+identifiée comme l'EEPROM émulée : `0xC600` → 99, `0xC800` → 100, `0xCA00` → 101, `0xCC00` → 102, et
+les huit profils de l'arm `0x03` sur **110 à 117**, la fin exacte de la plage. Le protocole d'écriture
+et la cartographie flash, établis séparément, se rejoignent sur la même borne.
+
+##### Ce que ça change pour le négatif d'appairage
+
+Les treize arms sont maintenant ouverts un par un. **Aucun ne touche l'EUART0 autrement que par
+l'accusé `euart0_cmd08`, qui renvoie la requête reçue verbatim.** Aucun n'émet la commande `0x01`, ni
+rien d'autre qui puisse détruire un lien enregistré. Le négatif tient dans les deux sens.
+
+Une nuance à l'affirmation antérieure « les sous-opcodes du conteneur `0x08` sont tous des transferts
+de données » : **douze sur treize** le sont (cinq écritures, sept lectures). Le treizième, `0x06`, est
+une **action** — la réinitialisation d'usine. Et l'arm `0x01` ne transfère pas seulement : il choisit
+aussi une base par le sous-index.
 
 #### Qui arme le séquenceur — résolu
 

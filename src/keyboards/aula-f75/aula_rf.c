@@ -93,12 +93,18 @@ _Static_assert(FREQ_SYS / 92 > 255000 && FREQ_SYS / 92 < 267000, "FREQ_SYS incom
 
 /*
  * Non émises ici, mais relevées sur le firmware d'usine : 0x04 (un paramètre,
- * envoyé périodiquement avec la valeur 3), 0x08 (conteneur à sous-commandes :
- * batterie, réglages, relecture de la flash), 0x0C (deux paramètres, dont le
- * déclencheur n'est PAS établi — la feuille de relevé le note « — ») et 0x0D
- * (renvoi du pourcentage de batterie AU module, qui est celui qui nous l'a
- * donné). Elles demandent des données que ce portage n'a pas, ou n'ont pas de
- * déclencheur connu.
+ * envoyé périodiquement avec la valeur 3), 0x08 (conteneur à sous-commandes),
+ * 0x0C (deux paramètres, 7 et 8, émise depuis la préparation de veille en
+ * `0x7D9B` quand `[0x0E3B]` est non nul) et 0x0D (renvoi du pourcentage de
+ * batterie AU module, qui est celui qui nous l'a donné). Elles demandent des
+ * données que ce portage n'a pas.
+ *
+ * Le conteneur 0x08 REÇU porte treize sous-codes, tous décodés : cinq écritures
+ * de page de configuration (0x01 remap, 0x02 éclairage par touche, 0x03 huit
+ * profils, 0x04 réglages, 0x09), sept lectures (0x05, 0x41-0x44, 0x49, 0x4A) et
+ * une action, 0x06, qui déclenche la réinitialisation d'usine immédiatement.
+ * Aucun n'agit sur l'appairage. Ce portage n'en implémente aucun : il n'expose
+ * pas sa configuration au module.
  */
 
 /* Longueurs totales, somme de contrôle comprise. */
