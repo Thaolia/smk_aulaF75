@@ -162,6 +162,41 @@ static __xdata uint8_t  probe_misses;
 static __bit            probe_answered;
 
 /*
+ * Jauge de batterie. Le SH68F90A n'a pas d'ADC — vérifié, aucun registre `ADC*`
+ * dans `sh68f90.h` ; c'est le BK3632 qui remonte la valeur brute dans les
+ * octets 6 et 7 de la trame d'état, et le firmware d'usine la convertit dans
+ * `fcn.0000801F`, une trame d'état sur six.
+ */
+#define RF_BATT_FRAMES  6   /* cadence d'usine : une trame d'état sur six */
+#define RF_BATT_EMPTY   715 /* XRAM 0x02CB : en dessous, le pourcentage est nul */
+#define RF_BATT_FULL    912 /* seuil haut de l'hystérésis de fcn.00001DC3 */
+#define RF_BATT_LOW     737 /* seuil bas de la même hystérésis */
+
+/*
+ * Amortissement, transcrit de CODE 0xAF8D : le pourcentage AFFICHÉ converge vers
+ * la cible d'un point à la fois, et l'index de la table est l'écart divisé par
+ * dix. Une décélération : plus on est près de la cible, plus on avance lentement.
+ *
+ * Les douze octets sont recopiés TELS QUELS depuis le dump. Attention à la
+ * notation : la feuille de relevé les liste `20 10 05 02 ...` dans un extrait
+ * hexadécimal, mais les commente en prose comme « vingt tics, dix, cinq, deux ».
+ * Les deux lectures ne coïncident que sur les deux dernières valeurs. Ce sont
+ * des octets de flash dans un listing hexadécimal, et le remplissage à deux
+ * chiffres de `05` et `02` le confirme : ce sont bien 0x20, 0x10, 0x05, 0x02,
+ * soit 32, 16, 5 et 2 tics. La prose de la feuille de relevé lit l'hexadécimal
+ * comme du décimal.
+ */
+static const __code uint8_t batt_damping[12] = {
+    0x20, 0x10, 0x05, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
+};
+
+static __xdata uint8_t  batt_frames;  /* compte les trames d'état */
+static __xdata uint8_t  batt_target;  /* pourcentage visé */
+static __xdata uint8_t  batt_shown;   /* pourcentage affiché, celui qui converge */
+static __xdata uint8_t  batt_ticks;   /* compteur d'amortissement */
+static __bit            batt_low;
+
+/*
  * Compteurs d'anti-rebond du sélecteur, un par position (0x08BD/0x02DF/0x0960).
  *
  * Le firmware d'usine exige dix passages consécutifs de son tic lent. SMK n'a
@@ -389,6 +424,108 @@ static void rf_rx_drop(void)
     }
 }
 
+/*
+ * Jauge de batterie, transcrite de `fcn.0000801F` — appelée une trame d'état
+ * sur six, exactement comme en usine.
+ *
+ * ÉTABLI : la provenance (octets 6 et 7 de la trame, petit-boutiste — l'octet 6
+ * est le poids faible), le plancher à 715, le plafond à 100 %, la cadence d'une
+ * trame sur six, et la courbe d'amortissement.
+ *
+ * INFÉRÉ : la PENTE. Le firmware d'usine plafonne et plancheise, mais la feuille
+ * de relevé ne donne pas le facteur d'échelle. On l'ancre sur les deux seules
+ * constantes établies de la même grandeur — le plancher 715 et le seuil haut
+ * 912 de l'hystérésis de `fcn.00001DC3` — ce qui donne une droite entre les
+ * deux. Une conversion 10 bits sur un pont diviseur rend l'hypothèse plausible,
+ * pas certaine.
+ */
+static void rf_battery_sample(void)
+{
+    if (++batt_frames < RF_BATT_FRAMES) {
+        return;
+    }
+    batt_frames = 0;
+
+    const uint16_t raw = (uint16_t)((uint16_t)rx_buf[7] << 8) | rx_buf[6];
+
+    if (raw <= RF_BATT_EMPTY) {
+        batt_target = 0;
+    } else if (raw >= RF_BATT_FULL) {
+        batt_target = 100;
+    } else {
+        /* (912-715) * 100 = 19 700 : le produit tient dans 16 bits, pas besoin
+         * de tirer la division 32 bits de SDCC. */
+        batt_target = (uint8_t)(((uint16_t)(raw - RF_BATT_EMPTY) * 100u) /
+                                (uint16_t)(RF_BATT_FULL - RF_BATT_EMPTY));
+    }
+
+    batt_low = (raw < RF_BATT_LOW) ? 1 : 0;
+
+    /* Convergence amortie : un point à la fois, d'autant plus lentement qu'on
+     * est près de la cible. */
+    if (batt_shown != batt_target) {
+        const uint8_t gap   = (batt_shown > batt_target) ? (uint8_t)(batt_shown - batt_target)
+                                                         : (uint8_t)(batt_target - batt_shown);
+        const uint8_t index = (gap > 110) ? 11 : (uint8_t)(gap / 10u);
+
+        if (++batt_ticks >= batt_damping[index]) {
+            batt_ticks = 0;
+            batt_shown = (batt_shown > batt_target) ? (uint8_t)(batt_shown - 1)
+                                                    : (uint8_t)(batt_shown + 1);
+        }
+    } else {
+        batt_ticks = 0;
+    }
+}
+
+/*
+ * Traitement de la trame d'état, transcrit de la branche `octet[0] == 2` de
+ * `euart0_parse`. Ce n'est pas seulement un décodage : c'est aussi le
+ * SUPERVISEUR DE LIEN du firmware d'usine, qui réaffirme la consigne dès que
+ * l'état reçu ne correspond pas au transport demandé.
+ *
+ *   if (transport == 2) {                       // Bluetooth
+ *       if (slot == 0 || slot > 3) slot = 1;    // borne 1..3, par le code
+ *       if (frame[4] == slot && frame[5] != 0)  // connecte
+ *       else cmd_01(slot, 0);                   // sinon on redemande
+ *   }
+ *   else if (transport == 1)                    // 2,4 GHz
+ *       if (frame[4] != 0 || frame[5] == 0) cmd_01(0, 0);
+ *   else if (transport == 0 && frame[4] != 0x0A) cmd_0E();
+ *
+ * La branche filaire n'est pas reprise : ce portage coupe l'IRQ EUART0 en mode
+ * filaire, donc aucune trame d'état n'y arrive jamais.
+ *
+ * `link_connected` cesse ainsi d'être un proxy : c'est désormais le vrai
+ * drapeau du module, croisé avec le slot attendu.
+ */
+static void rf_status_apply(void)
+{
+    const uint8_t code = rx_buf[4];
+    const uint8_t flag = rx_buf[5];
+
+    if (link_state == RF_LINK_BT) {
+        if (bt_slot < RF_SLOT_BT1 || bt_slot > RF_SLOT_BT3) {
+            bt_slot = RF_SLOT_BT1;
+        }
+        if (code == bt_slot && flag != 0) {
+            link_connected = 1;
+        } else {
+            link_connected = 0;
+            rf_queue_link(RF_LINK_SELECT);
+        }
+    } else if (link_state == RF_LINK_24G) {
+        if (code == 0 && flag != 0) {
+            link_connected = 1;
+        } else {
+            link_connected = 0;
+            rf_queue_link(RF_LINK_SELECT);
+        }
+    }
+
+    rf_battery_sample();
+}
+
 static void rf_rx_consume(void)
 {
     if (!rx_pending) {
@@ -407,15 +544,8 @@ static void rf_rx_consume(void)
              */
             if (rx_buf[1] == RF_CMD_STATUS && rx_buf[2] == 0 &&
                 rf_rx_checksum_ok(RF_RX_LEN_STATUS - 1)) {
-                /*
-                 * INFÉRÉ : « une trame d'état valide vient d'arriver » vaut
-                 * preuve de lien. Le champ qui porte vraiment la connexion est
-                 * l'octet 5, mais le firmware d'usine ne le lit que dans une
-                 * condition composée avec l'octet 4 — le décoder demande de
-                 * distinguer les transports, ce qui viendra avec la batterie.
-                 */
-                link_connected = 1;
                 probe_answered = 1;
+                rf_status_apply();
             }
             break;
 
@@ -653,6 +783,11 @@ void rf_init(void)
     probe_ticks     = 0;
     probe_misses    = 0;
     probe_answered  = 0;
+    batt_frames     = 0;
+    batt_target     = 0;
+    batt_shown      = 0;
+    batt_ticks      = 0;
+    batt_low        = 0;
     deb_wired = deb_24g = deb_bt = 0;
 
     rf_uart_init();
@@ -734,12 +869,18 @@ void rf_task(void)
     }
 
     /*
-     * `paired` n'est pas alimenté : aucun champ de la trame d'état n'a été
-     * identifié comme portant l'appairage, et le déduire de `connected` serait
-     * une invention. `keyboard.c` le laisse à zéro.
+     * `paired` n'est pas alimenté : AUCUN champ de la trame d'état ne porte
+     * l'appairage — la notion n'apparaît nulle part dans la feuille de relevé,
+     * et le déduire de `connected` serait une invention. `keyboard.c` le laisse
+     * à zéro.
+     *
+     * `battery_level` est sur l'échelle 0-7 qu'impose `keyboard.h`, pas en
+     * pourcentage : c'est le contrat des lecteurs d'indicateurs de SMK.
      */
-    keyboard_state.rf_link   = (uint8_t)rf_link();
-    keyboard_state.connected = rf_connected() ? 1 : 0;
+    keyboard_state.rf_link       = (uint8_t)rf_link();
+    keyboard_state.connected     = rf_connected() ? 1 : 0;
+    keyboard_state.battery_level = (uint8_t)(((uint16_t)batt_shown * 7u) / 100u);
+    keyboard_state.low_power     = batt_low ? 1 : 0;
 }
 
 rf_link_t rf_link(void)

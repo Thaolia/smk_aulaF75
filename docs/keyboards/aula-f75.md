@@ -3356,10 +3356,15 @@ if (++compteur >= delai) { compteur = 0; affiche += ±1; }
 20 10 05 02 02 02 02 02 02 02 02 02
 ```
 
-Écart de 0–9 → 20 tics par pas ; 10–19 → 10 ; 20–29 → 5 ; au-delà → 2. Un **amortissement
-décélérant** : plus la valeur affichée approche du réel, plus elle ralentit.
+Un **amortissement décélérant** : plus la valeur affichée approche du réel, plus elle ralentit.
 
 > Cette courbe était signalée comme inexpliquée depuis le début de l'analyse. Elle l'est.
+
+> **Attention à la base, relevée au moment du portage.** Une première rédaction glosait ces octets
+> en « écart 0–9 → **20** tics ; 10–19 → **10** ; 20–29 → **5** ; au-delà → **2** » — c'est lire un
+> extrait hexadécimal comme du décimal. Ce sont des octets de flash, et le remplissage à deux
+> chiffres de `05` et `02` le confirme : les délais sont **32, 16, 5 puis 2 tics**. Les deux
+> lectures ne coïncident que sur les deux dernières valeurs. Le portage transcrit les octets bruts.
 
 Le sens de convergence est choisi par `0x26.0`, avec deux compteurs distincts (`0x08C5` à la
 montée, `0x08DC` à la descente) et un traitement particulier à 100 % selon `0x2D.3`.
