@@ -626,6 +626,80 @@ qui **remet le tic à zéro**.
 | 16 | `0x1D71` | `0x08BB` | — | `ljmp 0x9659` |
 | 17 | `0x1D8D` | `0x08BB` | — | corps en ligne |
 
+#### Les huit moteurs manquants — décodés
+
+Cette page listait huit gestionnaires « non décodés ». Ils le sont. Le tableau ci-dessus les
+nomme ; voici ce qu'ils font, et ce que leur lecture a rapporté au passage.
+
+| idx | Moteur | Effet visible |
+| --- | --- | --- |
+| 5 | `0x9B2B` | **pluie** : une gouttelette descend chaque colonne, une ligne par trame ; une colonne tirée au hasard est relancée quand elle dort ; la traînée vient du fondu `0x64F1` |
+| 8 | `0xAC1C` → `0x4EA9`/`0x62E6` | **scintillement** : des touches tirées au hasard passées à pleine intensité |
+| 10 | `0x8DDF` | **serpent** : un point parcourt la grille en boustrophédon, inverse son sens horizontal au bord et descend d'une ligne, inverse son sens vertical en haut et en bas |
+| 15 | `0x82A5` | **vague** sur une seconde palette de 128 teintes, phase par touche avancée d'un cran par trame (`0xEDA2`) |
+| 16 | `0x9659` | **arc-en-ciel vertical** : teinte `+25` par ligne modulo 192, base défilante — six lignes couvrent 150 des 192 entrées |
+| 17 | `0x1D8D` | l'onde concentrique du moteur 1 (`0x746A`), **paramètre figé à 9** — pas un moteur distinct |
+| `0x20` | `0x1DAB` → `0x95A4` | **mode gaming** : image statique de `CODE 0xCA00`, plans rouge et vert nuls |
+| `0x26` | `0x1D05` → `0x8DDF` | le serpent en **mode couleur 7** (teinte aléatoire) avec luminosité forcée à 4 |
+
+##### Le modèle de rendu à deux plans
+
+C'est la trouvaille structurante, et elle vaut pour tous les moteurs, pas seulement les huit :
+
+- **`XRAM 0x0428`** — la **couleur de base** de chaque touche, `colonne × 18 + ligne × 3 + composante`.
+- **`XRAM 0x0017`** — l'**intensité** de chaque touche, `colonne × 6 + ligne`, 126 octets.
+- **`fcn @ 0x62E6`** — le rendu : `base × intensité >> 5` vers `0x0152`, qui part ensuite au PWM.
+
+C'est exactement le modèle que le portage tenait déjà pour le seul moteur réactif. D'où la
+structure retenue : **six effets partagent la même mécanique et ne diffèrent que par leur semeur**
+(touches frappées, gouttelettes, hasard, serpent, serpent multicolore, couronnes).
+
+##### `0x0428` est un miroir de `0x0152`
+
+La question restait posée de savoir si ces deux tampons de 378 octets avaient la même forme. Ils
+l'ont : `fcn @ 0x8B29` écrit **la même couleur dans les deux**, avec le **même** indexage
+`colonne × 18 + ligne × 3 + composante`. La correspondance canal ↔ (ligne, couleur) est donc
+vérifiée sur deux chemins d'écriture indépendants, pas un.
+
+##### L'image « gaming » confirme tout le plan de matrice
+
+Le plan bleu de `CODE 0xCAFC` allume neuf positions : `(c0,l0)`, `(c2,l2)`, `(c1,l3)`, `(c2,l3)`,
+`(c3,l3)`, `(c13,l4)`, `(c12,l5)`, `(c13,l5)`, `(c14,l5)`. Reportées sur
+`layouts/default/layout.c`, ce sont **Échap, W, A, S, D, ↑, ←, ↓, →**. Neuf coïncidences sur une
+voie de données qui n'a rien à voir avec le balayage : c'est la meilleure confirmation disponible
+du plan de matrice complet.
+
+##### Trois tables recopiées
+
+- **Palette secondaire, `CODE 0x2D6D`** — 128 triplets `(R,G,B)`, 384 octets. Distincte de la roue
+  de 192. Ses bornes sont fixées par contiguïté : la roue finit en `0x2D6A`, la carte des couronnes
+  commence en `0x2EED = 0x2D6D + 384`.
+- **Couronnes de l'onde, `CODE 0x2959`** — 9 groupes de 13 identifiants, `0xFF` pour vide.
+  L'encodage est `colonne × 8 + ligne` : la couronne 0 vaut `0x3A` = (colonne 7, ligne 2), le centre
+  que cette page annonçait déjà. **Ce ne sont pas des distances** — la couronne 8 contient `(2,0)`,
+  qu'aucune métrique ne placerait là. C'est un ordre de propagation écrit à la main.
+- **Carte de présence, `CODE 0xC500`** — six emplacements de la grille 6 × 15 n'ont pas de touche.
+  Sa ligne 4 permute les colonnes, **exactement** comme la ligne 4 de la table `0x2EED` : deux
+  relevés indépendants qui butent sur la même particularité de rangée.
+
+##### Le générateur pseudo-aléatoire, `fcn @ 0xA997`
+
+LFSR de Galois sur 32 bits, décalage à droite, masque `0xCC4C4ECE`, état en `XRAM 0x0F67`, réamorcé
+à `0xA5A5` s'il tombe à zéro, seize tours par appel ; suivi de `0x4D52` (division signée) pour le
+modulo. Six appelants, dont la pluie (`rand % 15`) et le mode couleur 7 (`rand % 192`).
+
+Le portage transcrit le **comportement** et substitue le **générateur** : reproduire le polynôme ne
+rendrait pas la même suite sans la même graine ni le même ordre d'appel, et coûterait de la pile
+dans l'ISR pour une propriété observable qui est « une colonne au hasard ».
+
+##### Ce qui reste ouvert sur ces moteurs
+
+Le **décalage entre touches de l'effet 15**. La palette et l'avance d'un cran par trame sont
+transcrites. Le plan de phase d'usine vit en `XRAM 0x0017` et `fcn @ 0xACA3` l'y recopie **transposé**
+depuis `XRAM 0x0E49` (stride 21 → stride 6) — mais l'écrivain de `0x0E49` n'a pas été cherché. Avec
+un plan uniforme, l'effet d'usine serait un clavier d'une seule couleur qui défile ; le portage lui
+donne un décalage diagonal et le signale sur place.
+
 Hors table, les deux effets spéciaux :
 
 | Effet | Gestionnaire | Ce qu'il fait |
@@ -636,6 +710,9 @@ Hors table, les deux effets spéciaux :
 `0x64F1` revient sept fois : c'est le rendu partagé, appelé soit comme sous-étape sur le compteur
 secondaire, soit comme rendu principal (idx 12). Les indices **9 et 14 sont explicitement vides** —
 deux emplacements d'effet réservés et non implémentés.
+
+**Les dix-huit gestionnaires sont désormais tous décodés et portés** (hors les deux vides). Le
+détail des huit derniers suit.
 
 #### `0x1BA5`, en particulier
 
