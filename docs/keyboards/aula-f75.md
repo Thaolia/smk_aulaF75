@@ -141,9 +141,17 @@ de caractère** (navigateur réglé sur « page précédente », recherche incr�
 C'est la seule fonction de ce clavier qui envoie des touches à l'hôte sans que personne n'en touche
 une.
 
-**Et il empêche la veille.** `sleep_note_activity()` est appelé à chaque pas, sinon le minuteur
-d'inactivité endort le clavier au bout d'une quinzaine de minutes et le mode s'arrête seul. En
-sans-fil, il vide donc la batterie tant qu'il tourne. C'est un choix, pas un oubli.
+**Et il empêche la veille.** `sleep_note_activity()` est appelé à chaque pas, sinon le mode s'arrête
+seul au bout d'environ **2 min 15 s** sur batterie. En sans-fil, il vide donc la batterie tant qu'il
+tourne. C'est un choix, pas un oubli.
+
+⚠️ **Le délai de veille se calcule facilement de travers.** `SLEEP_TIMEOUT` vaut 21 000 *trames*, et
+la trame que compte `sleep.c` est celle que rend `indicators_update_step()` : elle boucle tous les
+**quinze** passages (`led_col` parcourt `LED_COLS`), c'est-à-dire un multiplexage complet du
+panneau — **pas** les quatre-vingt-dix sous-trames d'une trame d'animation. Une trame vaut donc
+15 × 400 µs + un balayage de matrice (~320 µs) ≈ **6,3 ms**, et le délai 21 000 × 6,3 ms ≈ **133 s**.
+Confondre les deux trames donne treize minutes au lieu de deux — l'erreur a été commise et corrigée
+ici même.
 
 
 

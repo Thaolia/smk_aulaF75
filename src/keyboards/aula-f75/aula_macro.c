@@ -220,9 +220,11 @@ void aula_macro_task(void)
     }
     macro_due = 0;
 
-    /* Le minuteur d'inactivité endormirait le clavier au bout de ~13 minutes et
-     * le mode s'arrêterait tout seul. Contrepartie assumée : tant qu'il tourne,
-     * le clavier ne dort plus et vide sa batterie en sans-fil. */
+    /* Sans ça, le mode s'arrêterait tout seul au bout d'environ 2 min 15 s en
+     * sans-fil : `sleep.c` endort après 21 000 trames et une trame vaut quinze
+     * sous-trames plus un balayage, soit ~6,3 ms -- PAS les quatre-vingt-dix
+     * sous-trames d'une trame d'animation. Contrepartie assumée : tant que le
+     * mode tourne, le clavier ne dort plus et vide sa batterie. */
     sleep_note_activity();
 
     switch (macro_step) {
