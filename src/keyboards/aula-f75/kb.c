@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "aula_encoder.h"
 #ifdef RF_EUART0
 #    include "aula_rf.h"
 #endif
@@ -124,6 +125,7 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
 
 void kb_update(void)
 {
+    aula_encoder_task();
 #ifdef RF_EUART0
     rf_task();
 #endif

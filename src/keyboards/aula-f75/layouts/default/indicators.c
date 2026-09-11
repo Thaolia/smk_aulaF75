@@ -8,6 +8,7 @@
 #include "user_matrix.h"
 #include "aula_rgb.h"
 #include "aula_fx.h"
+#include "aula_encoder.h"
 #ifdef RF_EUART0
 #    include "aula_rf.h"
 #endif
@@ -1022,6 +1023,11 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 {
     (void)keyboard;      /* les indicateurs d'état ne sont pas encore portés */
     (void)current_step;  /* `tick.c` passe toujours 0 */
+
+    /* La sous-trame LED est la seule base de temps régulière du firmware --
+     * ~400 µs -- et c'est à cette cadence que l'usine échantillonne aussi sa
+     * molette, depuis son ISR PWM. */
+    aula_encoder_sample();
 
     if (user_settings.led_effect == AULA_FX_REACTIVE ||
         user_settings.led_effect == AULA_FX_LAKE) {

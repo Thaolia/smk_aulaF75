@@ -152,7 +152,8 @@ possible_src_keyboard = [
     # Sources optionnelles propres a un clavier ; ignorees si le fichier n'existe pas.
     'aula_rgb.c',
     'aula_fx.c',
-    'aula_rf.c'
+    'aula_rf.c',
+    'aula_encoder.c'
 ]
 
 possible_src_layout = [

@@ -326,7 +326,7 @@ n'en peuple que 15. C'est bien **15** colonnes physiques.
 | Ordre de chargement des 18 canaux PWM | ✅ **relevé et implémenté** (`aula_rgb.c`) |
 | Correspondance canal ↔ (ligne, couleur) | ✅ **établie via le driver OpenRGB** |
 | Câblage du rendu dans la boucle SMK | ✅ **résolu** — sous-trames LED de `tick.c`, voir ci-dessous |
-| Rotation d'encodeur | ❌ non implémentée (phases identifiées : `P0.5` / `P0.6`) |
+| Rotation d'encodeur | ✅ **implémentée** — quadrature `P0.5`/`P0.6`, volume ± (`src/keyboards/aula-f75/aula_encoder.c`) |
 | Broches au rôle inconnu | ❓ `P0.0` `P0.1` `P4.1` `P4.4` `P5.5` `P5.6` `P7.7` — `P7.4`/`P4.5` sont le sélecteur de connexion, `P4.7` la ligne « module prêt » |
 | Veille | ✅ **implémentée**, USB **et radio** — transcrite du firmware d'usine, non testée sur matériel |
 | Sans-fil 2,4 GHz / Bluetooth | ⚠️ **écrit et compilé** (`aula_rf.c`, EUART0), **jamais exécuté** — voir ci-dessous |
