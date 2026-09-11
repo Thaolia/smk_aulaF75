@@ -760,10 +760,41 @@ static bool rf_diag_paint(void)
 
 #endif /* RF_EUART0 */
 
-/* Rouge du témoin de frappe automatique. 48 sur 255, soit à peu près le second
- * des dix crans de luminosité (51) : franchement visible dans le noir, jamais
- * éblouissant, et sans rapport avec le rouge vif du diagnostic radio. */
-#define MACRO_RED_LEVEL 48
+/*
+ * Témoin de frappe automatique : un COEUR QUI BAT, en rouge, sur tout le clavier.
+ *
+ * Deux coups par cycle -- le « poum-poum » d'un vrai coeur, pas une respiration.
+ * Le premier (systole) frappe fort, le second, 227 ms plus tard, frappe moins
+ * fort, puis vient un long repos à lueur faible qui garde le mode signalé.
+ *
+ * CADENCE. Un pas de table par balayage complet de régénération, c'est-à-dire
+ * quatre-vingt-dix sous-trames de ~421 µs, soit ~37,9 ms. Vingt-quatre pas font
+ * 909 ms par battement : **66 pulsations par minute**, un pouls au repos.
+ *
+ * Pourquoi le balayage complet et pas un rythme choisi librement : les quatre-
+ * vingt-dix cellules sont repeintes UNE PAR SOUS-TRAME, pas toutes ensemble. Une
+ * cadence qui ne serait pas celle du balayage ferait tomber le changement de
+ * valeur au milieu d'un cycle de repeinte, et le clavier montrerait une couture
+ * -- une moitié au coup d'avant, l'autre au coup d'après. En avançant sur le
+ * bouclage du balayage, le panneau entier porte toujours la même valeur.
+ *
+ * VALEURS. `aula_rgb_duty()` est linéaire (`valeur << 2`), donc ce sont bien des
+ * intensités. Le plancher à 12 reste visible dans le noir sans éclairer la
+ * pièce ; le pic à 170 claque sans éblouir. Comme le diagnostic radio, la table
+ * court-circuite la luminosité utilisateur : le témoin doit rester lisible
+ * réglage à zéro et effet éteint.
+ */
+#define MACRO_HEART_STEPS 24
+
+static const __code uint8_t macro_heart[MACRO_HEART_STEPS] = {
+    170, 140,  96,  60,  36,  24, /* systole : attaque sèche, chute rapide */
+    120,  92,  62,  40,  26,  18, /* diastole : plus faible, même profil    */
+     14,  12,  12,  12,  12,  12, /* repos : ~455 ms de lueur faible        */
+     12,  12,  12,  12,  12,  12,
+};
+
+static __xdata uint8_t macro_beat;
+static __bit           macro_was_on;
 
 static void led_regen_one(void)
 {
@@ -806,7 +837,7 @@ static void led_regen_one(void)
          * à zéro, et surtout effet ÉTEINT, qui est précisément l'état dans
          * lequel on laisse le clavier tourner seul.
          */
-        aula_rgb_set(regen_row, regen_col, MACRO_RED_LEVEL, 0, 0);
+        aula_rgb_set(regen_row, regen_col, macro_heart[macro_beat], 0, 0);
         goto advance;
     }
 
@@ -996,6 +1027,11 @@ advance:
         regen_col = 0;
         if (++regen_row >= LED_ROWS) {
             regen_row = 0;
+            /* Le panneau vient d'être repeint en entier : le coeur peut avancer
+             * d'un pas sans couper la trame en deux. */
+            if (++macro_beat >= MACRO_HEART_STEPS) {
+                macro_beat = 0;
+            }
             /* La phase avance DANS la porte de trame, comme en usine : le rendu
              * d'usine est entièrement conditionné à `tic >= période`. */
             spark_decay_due = fx_frame_advance();
@@ -1052,6 +1088,15 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
      * molette, depuis son ISR PWM. */
     aula_encoder_sample();
     aula_macro_tick();
+
+    if (aula_macro_active()) {
+        if (!macro_was_on) {
+            macro_was_on = 1;
+            macro_beat   = 0; /* le mode démarre sur un coup, pas au milieu du repos */
+        }
+    } else {
+        macro_was_on = 0;
+    }
 
     if (user_settings.led_effect == AULA_FX_REACTIVE ||
         user_settings.led_effect == AULA_FX_LAKE) {

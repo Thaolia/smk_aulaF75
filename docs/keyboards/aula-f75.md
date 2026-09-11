@@ -99,7 +99,22 @@ deux captures ont été perdues.
 ⚠️ **Aucun équivalent d'usine.** `Fn + Espace` ou `Fn + appui molette` lance un mode qui tape une
 lettre au hasard, l'efface d'un retour arrière, et recommence après une attente tirée au sort entre
 0,5 et 1,5 s. N'importe quelle touche l'arrête, et cette touche ne tape rien. Tout le clavier passe
-au rouge sourd pendant ce temps. Voir `aula_macro.c`.
+en rouge battant comme un cœur pendant ce temps. Voir `aula_macro.c`.
+
+**Le témoin cardiaque, et pourquoi sa cadence n'est pas libre.** Deux coups par cycle — le premier
+fort, le second 227 ms plus tard et plus faible — puis un long repos à lueur faible : 909 ms par
+battement, soit 66 pulsations par minute. La table de vingt-quatre intensités vit dans
+`indicators.c`, en `__code`.
+
+Le pas de table avance sur le **bouclage du balayage de régénération**, pas à un rythme choisi
+librement. Les quatre-vingt-dix cellules sont repeintes **une par sous-trame**, jamais toutes
+ensemble : une cadence désalignée ferait tomber le changement de valeur au milieu d'un cycle de
+repeinte et le panneau montrerait une couture, une moitié au coup d'avant et l'autre au coup
+d'après — d'autant plus visible que l'attaque est sèche (trente crans d'écart entre deux pas). En
+avançant sur le bouclage, le panneau entier porte toujours la même valeur. Quatre-vingt-dix
+sous-trames de ~421 µs font ~37,9 ms, et vingt-quatre pas tombent sur un rythme cardiaque crédible.
+
+Les valeurs sont des intensités réelles : `aula_rgb_duty()` est linéaire (`valeur << 2`).
 
 L'intérêt de la consigner ici n'est pas la fonction : ce sont **deux propriétés du cœur de SMK**
 qu'elle a mises au jour, et qui piégeront la prochaine fonction du même genre.
