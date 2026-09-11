@@ -85,11 +85,12 @@ static const __code uint8_t led_speeds[] = {1, 2, 4, 8, 16};
 #define AULA_FX_SNAKE     ((uint8_t)(FX_COUNT + 3)) /*  7  0x8DDF */
 #define AULA_FX_SNAKE_RGB ((uint8_t)(FX_COUNT + 4)) /*  8  0x1D05, effet 0x26 -- adapté */
 #define AULA_FX_RIPPLE    ((uint8_t)(FX_COUNT + 5)) /*  9  0x746A / 0x1D8D */
-#define AULA_FX_KEYWAVE   ((uint8_t)(FX_COUNT + 6)) /* 10  0x82A5 */
-#define AULA_FX_VRAINBOW  ((uint8_t)(FX_COUNT + 7)) /* 11  0x9659 */
-#define AULA_FX_GAMING    ((uint8_t)(FX_COUNT + 8)) /* 12  0x1DAB -> 0x95A4 */
-#define AULA_FX_SHIMMER   ((uint8_t)(FX_COUNT + 9)) /* 13  0x60C9, effet d'usine 6 */
-#define AULA_FX_OFF       ((uint8_t)(FX_COUNT + 10))/* 14 */
+#define AULA_FX_LAKE      ((uint8_t)(FX_COUNT + 6)) /* 10  CREATION, aucun equivalent d'usine */
+#define AULA_FX_KEYWAVE   ((uint8_t)(FX_COUNT + 7)) /* 11  0x82A5 */
+#define AULA_FX_VRAINBOW  ((uint8_t)(FX_COUNT + 8)) /* 12  0x9659 */
+#define AULA_FX_GAMING    ((uint8_t)(FX_COUNT + 9)) /* 13  0x1DAB -> 0x95A4 */
+#define AULA_FX_SHIMMER   ((uint8_t)(FX_COUNT + 10))/* 14  0x60C9, effet d'usine 6 */
+#define AULA_FX_OFF       ((uint8_t)(FX_COUNT + 11))/* 15 */
 
 /*
  * Les six premiers de cette liste (REACTIVE à RIPPLE) partagent la MÊME
@@ -201,6 +202,38 @@ static uint8_t         snake_row;
 static uint8_t         snake_right; /* sens horizontal courant */
 static uint8_t         snake_down;  /* sens vertical courant */
 static uint8_t         ripple_ring;
+/*
+ * LE LAC -- l'onde qui part de la touche frappée.
+ *
+ * ⚠️ CET EFFET N'EST PAS UNE TRANSCRIPTION. Le firmware d'usine n'a rien de tel :
+ * son onde concentrique (`0x746A`) part d'un centre FIXE, tabulé en
+ * `CODE 0x2959`, et son moteur réactif (`0x64F1`) allume la touche frappée sans
+ * la propager. Celui-ci combine les deux et c'est une création.
+ *
+ * Quatre gouttes simultanées. Chacune retient son origine, son âge en trames et
+ * sa teinte de départ. À chaque trame l'âge avance d'un cran ; une cellule est
+ * rallumée à fond quand sa DISTANCE à l'origine vaut exactement l'âge -- le
+ * front de l'onde. La décroissance du plan d'intensité, déjà là, fait la traîne
+ * derrière lui, comme le sillage d'une ride sur l'eau.
+ *
+ * La distance pèse les lignes DEUX FOIS les colonnes : la géométrie générée
+ * place les colonnes tous les 17 crans et les lignes tous les 42, donc un pas de
+ * ligne vaut environ deux pas et demi de colonne. Sans cette pondération l'onde
+ * serait un losange écrasé.
+ *
+ * Le coût tient dans le budget de l'ISR : le contrôle se fait UNE cellule à la
+ * fois, dans `led_regen_one()`, soit quatre soustractions par sous-trame -- et
+ * non un balayage des quatre-vingt-dix cellules d'un coup.
+ */
+#define LAKE_DROPS    4
+#define LAKE_MAX_AGE  25 /* 14 colonnes + 2 x 5 lignes, plus un cran de marge */
+#define LAKE_HUE_STEP 3  /* la teinte glisse en s'éloignant : 24 x 3 = un tiers de roue */
+
+static __xdata uint8_t drop_col[LAKE_DROPS];
+static __xdata uint8_t drop_row[LAKE_DROPS];
+static __xdata uint8_t drop_age[LAKE_DROPS]; /* 0 = emplacement libre */
+static __xdata uint8_t drop_hue[LAKE_DROPS];
+
 static uint8_t         fx_ms_acc;    /* millisecondes accumulées depuis la dernière trame */
 static __bit           spark_decay_due; /* la trame écoulée autorise la décroissance */
 
@@ -344,6 +377,37 @@ static void ripple_step(void)
  * fois par trame. Y semer ferait courir la pluie et le serpent six fois trop
  * vite, et rien dans le journal de compilation ne le montrerait.
  */
+/* Distance pondérée d'une cellule à une origine : les lignes comptent double. */
+static uint8_t lake_dist(uint8_t col, uint8_t row, uint8_t c0, uint8_t r0)
+{
+    const uint8_t dc = (col > c0) ? (uint8_t)(col - c0) : (uint8_t)(c0 - col);
+    const uint8_t dr = (row > r0) ? (uint8_t)(row - r0) : (uint8_t)(r0 - row);
+
+    return (uint8_t)(dc + (uint8_t)(dr << 1));
+}
+
+/* Une frappe jette une goutte : emplacement libre, sinon la plus ancienne. */
+static void lake_drop(uint8_t col, uint8_t row, uint8_t hue)
+{
+    uint8_t i, pick = 0, oldest = 0;
+
+    for (i = 0; i < LAKE_DROPS; i++) {
+        if (drop_age[i] == 0) {
+            pick = i;
+            break;
+        }
+        if (drop_age[i] > oldest) {
+            oldest = drop_age[i];
+            pick   = i;
+        }
+    }
+    drop_col[pick] = col;
+    drop_row[pick] = row;
+    drop_hue[pick] = hue;
+    drop_age[pick] = 1;
+    spark_seed(col, row, hue); /* le point d'impact s'allume tout de suite */
+}
+
 /*
  * Remise à plat complète sur changement d'effet : le plan d'intensité ET l'état
  * des semeurs. Sans cela, on rentre dans la pluie avec des colonnes déjà à
@@ -363,6 +427,9 @@ static void fx_reset(void)
     snake_down   = 1;
     ripple_ring     = 0;
     fx_ms_acc       = 0;
+    for (col = 0; col < LAKE_DROPS; col++) {
+        drop_age[col] = 0;
+    }
     spark_decay_due = 0;
 
     /*
@@ -399,6 +466,7 @@ static void fx_reset(void)
  *   AULA_FX_SNAKE            10        0x8DDF    `0x3011`
  *   AULA_FX_SNAKE_RGB      0x26        0x1D05    AUCUNE -- choix : celle du serpent, même moteur
  *   AULA_FX_RIPPLE           17        0x746A    `0x302F`
+ *   AULA_FX_LAKE              -            -      AUCUNE -- création : celle de l'onde
  *   AULA_FX_KEYWAVE          15        0x82A5    `0x3025`
  *   AULA_FX_VRAINBOW         16        0x9659    `0x302A`
  *   AULA_FX_GAMING         0x20        0x95A4    AUCUNE -- image fixe : choix, celle de l'uni
@@ -418,6 +486,7 @@ static const __code uint8_t fx_period_ms[AULA_FX_OFF][LED_SPEED_LEVELS] = {
     {120,  90,  70,  45,   1}, /* SNAKE         -- CODE 0x3011                */
     {120,  90,  70,  45,   1}, /* SNAKE_RGB     -- celle du serpent, choix    */
     { 50,  40,  30,  20,   8}, /* RIPPLE        -- CODE 0x302F                */
+    { 50,  40,  30,  20,   8}, /* LAKE          -- création : celle de l'onde */
     { 32,  24,  16,   8,   1}, /* KEYWAVE       -- CODE 0x3025                */
     { 46,  36,  26,  16,   6}, /* VRAINBOW      -- CODE 0x302A                */
     { 45,  35,  25,  15,   6}, /* GAMING        -- image fixe, choix          */
@@ -496,6 +565,16 @@ static bool fx_frame_advance(void)
         case AULA_FX_SNAKE:     snake_step(0);   break;
         case AULA_FX_SNAKE_RGB: snake_step(1);   break;
         case AULA_FX_RIPPLE:    ripple_step();   break;
+        case AULA_FX_LAKE: {
+            uint8_t i;
+
+            for (i = 0; i < LAKE_DROPS; i++) {
+                if (drop_age[i] != 0 && ++drop_age[i] >= LAKE_MAX_AGE) {
+                    drop_age[i] = 0; /* l'onde a quitté le clavier */
+                }
+            }
+            break;
+        }
         default:                                 break;
     }
     return true;
@@ -642,7 +721,23 @@ static void led_regen_one(void)
     if (aula_fx_key_id(regen_col, regen_row) == AULA_FX_NO_KEY) {
         aula_rgb_set(regen_row, regen_col, 0, 0, 0);
     } else if (user_settings.led_effect >= AULA_FX_REACTIVE &&
-        user_settings.led_effect <= AULA_FX_RIPPLE) {
+        user_settings.led_effect <= AULA_FX_LAKE) {
+        /*
+         * Le front de l'onde, pour le lac : cette cellule est-elle exactement à
+         * la distance atteinte par l'une des gouttes ? Quatre comparaisons, une
+         * seule fois par cellule et par sous-trame.
+         */
+        if (user_settings.led_effect == AULA_FX_LAKE) {
+            uint8_t i;
+
+            for (i = 0; i < LAKE_DROPS; i++) {
+                if (drop_age[i] != 0 &&
+                    lake_dist(regen_col, regen_row, drop_col[i], drop_row[i]) == drop_age[i]) {
+                    spark_seed(regen_col, regen_row,
+                               (uint8_t)(drop_hue[i] + (uint8_t)(drop_age[i] * LAKE_HUE_STEP)));
+                }
+            }
+        }
         /* Les six effets à plan d'intensité : le rendu est le même pour tous,
          * seul le semeur diffère. La décroissance vit ici parce que chaque
          * cellule est régénérée exactement une fois par trame. */
@@ -657,7 +752,16 @@ static void led_regen_one(void)
             aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], k), led_scale(rgb[1], k),
                          led_scale(rgb[2], k));
             if (spark_decay_due) {
-                const uint8_t decay = SPARK_DECAY;
+                /*
+                 * Le lac décroît TROIS FOIS plus vite que le moteur réactif.
+                 * À 8 par trame, la traîne dure 32 trames alors que l'onde met
+                 * 25 trames à traverser le clavier : le sillage rattraperait le
+                 * front et on verrait un disque qui s'allume, pas une ride. À 24,
+                 * la traîne fait une dizaine de trames -- un anneau avec son
+                 * sillage derrière. C'est un CHOIX, propre à cet effet.
+                 */
+                const uint8_t decay =
+                    (user_settings.led_effect == AULA_FX_LAKE) ? (uint8_t)24 : SPARK_DECAY;
 
                 spark_val[regen_col][regen_row] = (val > decay) ? (uint8_t)(val - decay) : 0;
             }
@@ -827,8 +931,12 @@ static void led_react_poll(void)
     }
     for (uint8_t row = 0; row < LED_ROWS; row++) {
         if (fresh & (uint8_t)(1u << row)) {
-            spark_hue[led_col][row] = led_phase;
-            spark_val[led_col][row] = 255;
+            if (user_settings.led_effect == AULA_FX_LAKE) {
+                lake_drop(led_col, row, led_phase);
+            } else {
+                spark_hue[led_col][row] = led_phase;
+                spark_val[led_col][row] = 255;
+            }
         }
     }
 }
@@ -838,7 +946,8 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
     (void)keyboard;      /* les indicateurs d'état ne sont pas encore portés */
     (void)current_step;  /* `tick.c` passe toujours 0 */
 
-    if (user_settings.led_effect == AULA_FX_REACTIVE) {
+    if (user_settings.led_effect == AULA_FX_REACTIVE ||
+        user_settings.led_effect == AULA_FX_LAKE) {
         led_react_poll();
     }
 
@@ -867,7 +976,7 @@ void indicators_post_update(void)
 
 void indicators_apply_defaults(void)
 {
-    user_settings.led_effect     = FX_RADIAL;
+    user_settings.led_effect     = AULA_FX_LAKE; /* demandé comme défaut */
     user_settings.led_brightness = LED_BRIGHTNESS_DEFAULT;
     user_settings.led_speed      = LED_SPEED_DEFAULT;
     user_settings.ul_effect      = AULA_FX_COLOR_WHEEL; /* arc-en-ciel, comme en usine */
@@ -877,7 +986,7 @@ void indicators_apply_defaults(void)
 void indicators_validate_settings(void)
 {
     if (user_settings.led_effect > AULA_FX_OFF) {
-        user_settings.led_effect = FX_RADIAL;
+        user_settings.led_effect = AULA_FX_LAKE;
     }
     if (user_settings.led_brightness >= LED_BRIGHTNESS_LEVELS) {
         user_settings.led_brightness = LED_BRIGHTNESS_DEFAULT;

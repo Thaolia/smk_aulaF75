@@ -1,6 +1,65 @@
 # Epomaker × AULA F75 (modèle classique)
 
 
+
+## `AULA_FX_LAKE` — l'onde qui part de la touche frappée
+
+⚠️ **Cet effet n'est PAS une transcription.** Rien d'équivalent n'existe dans le firmware d'usine :
+son onde concentrique `0x746A` part d'un centre **fixe**, tabulé en `CODE 0x2959`, et son moteur
+réactif `0x64F1` allume la touche frappée **sans la propager**. Celui-ci combine les deux, et c'est
+une création — demandée comme « une vague de lumière, comme si je tapais sur un lac plat ».
+
+### Le mécanisme
+
+Quatre **gouttes** simultanées, seize octets de XDATA. Chacune retient son origine, son âge en
+trames et sa teinte de départ :
+
+```c
+static __xdata uint8_t drop_col[4], drop_row[4], drop_age[4], drop_hue[4];
+```
+
+- **à la frappe** — `led_react_poll()` appelle `lake_drop()` : emplacement libre, sinon la goutte la
+  plus ancienne est remplacée. Le point d'impact s'allume immédiatement, l'âge part à 1.
+- **à chaque trame** — l'âge avance d'un cran ; la goutte est libérée à 25, quand l'onde a quitté le
+  clavier.
+- **à chaque cellule** — la cellule est rallumée à fond si sa **distance** à une origine vaut
+  exactement l'âge de cette goutte. C'est le front de l'onde.
+
+La **décroissance du plan d'intensité**, déjà en place, fait la traîne derrière le front. Rien à
+ajouter : le sillage tombe tout seul.
+
+### Deux choix qui font la différence visuelle
+
+**La distance pèse les lignes DEUX FOIS les colonnes.** La géométrie générée place les colonnes tous
+les 17 crans et les lignes tous les 42 : un pas de ligne vaut environ deux pas et demi de colonne.
+Sans pondération, l'onde serait un losange écrasé au lieu d'un cercle.
+
+```c
+return (uint8_t)(dc + (uint8_t)(dr << 1));
+```
+
+**La traîne décroît trois fois plus vite qu'ailleurs — 24 au lieu de 8.** À 8 par trame, la traîne
+dure 32 trames alors que l'onde met 25 trames à traverser le clavier : le sillage rattraperait le
+front et on verrait un disque qui s'allume, pas une ride. À 24, la traîne fait une dizaine de trames.
+
+La teinte glisse aussi en s'éloignant, `drop_hue + âge × 3` : sur les 24 crans du trajet, un tiers de
+roue. Deux frappes rapprochées partent de teintes différentes puisque chacune prend `led_phase` au
+moment de l'impact.
+
+### Le coût, et pourquoi il tient dans l'ISR
+
+Le contrôle du front se fait **une cellule à la fois**, dans `led_regen_one()` — quatre
+soustractions et quatre comparaisons par sous-trame. Pas de balayage des quatre-vingt-dix cellules
+d'un coup, qui aurait pesé dans un créneau de 400 µs.
+
+Coût total : **+550 octets de flash, +16 octets de XDATA**, la marge en RAM interne et la pile
+inchangées.
+
+### C'est l'effet par défaut
+
+`indicators_apply_defaults()` sélectionne `AULA_FX_LAKE`, et la validation y retombe aussi quand un
+réglage enregistré est hors bornes.
+
 ## La couche Fn d'usine, décodée — et ce qu'elle confirme
 
 `CODE 0xCC00` est la **couche de base**, `CODE 0xD000` la **couche Fn** : quatre octets par touche,
