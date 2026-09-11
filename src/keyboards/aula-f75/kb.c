@@ -36,6 +36,7 @@ void kb_update_switches(void)
 
 extern void indicators_next_effect(void);
 extern void indicators_next_color(void);
+extern void indicators_toggle_direction(void);
 extern void indicators_prev_effect(void);
 extern void indicators_brightness_up(void);
 extern void indicators_brightness_down(void);
@@ -77,6 +78,9 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             return false;
         case CLR_NEXT:
             if (key_pressed) indicators_next_color();
+            return false;
+        case DIR_TOG:
+            if (key_pressed) indicators_toggle_direction();
             return false;
 
         case LNK_BT1:

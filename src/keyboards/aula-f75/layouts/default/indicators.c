@@ -168,7 +168,23 @@ static void spark_reset(void)
 }
 
 static uint8_t led_col;   /* colonne affichée par la sous-trame courante */
-static uint8_t led_phase; /* phase de l'animation */
+static uint8_t led_phase; /* phase de l'animation, repli naturel a 256 */
+
+/*
+ * Second compteur de phase, replié à 192 -- et c'est un CORRECTIF.
+ *
+ * `led_phase` est un octet : il reboucle à 256. Les consommateurs dont le module
+ * divise 256 ne le voient pas -- la vague replie à 128, la roue de SMK travaille
+ * sur 0-255. Mais l'arc-en-ciel vertical replie à **192** et le scintillement à
+ * 192 ou 96 : `256 % 192 = 64`, donc à chaque rebouclage de `led_phase` leur
+ * teinte SAUTE d'un tiers de roue. Le firmware d'usine n'a pas ce défaut parce
+ * qu'il range la phase PAR TOUCHE et l'incrémente directement modulo 192 ou 96.
+ *
+ * Ce compteur-ci se replie à 192, que 96 divise : les deux modules y sont sans
+ * couture. Deux compteurs valent mieux qu'un seul faux.
+ */
+#define FX_PHASE192 192u
+static uint8_t fx_phase192;
 static uint8_t regen_row; /* curseur de régénération, une cellule par sous-trame */
 static uint8_t regen_col;
 
@@ -447,7 +463,32 @@ static bool fx_frame_advance(void)
         fx_ms_acc = 0; /* une trame ne peut pas aller plus vite qu'un balayage */
     }
 
-    led_phase = (uint8_t)(led_phase + led_speeds[user_settings.led_speed]);
+    /*
+     * LE SENS DE DÉFILEMENT -- transcrit du bit `0x23` du firmware d'usine.
+     *
+     * `0xEDA2` ne fait pas qu'incrémenter : il teste ce bit et DÉCRÉMENTE quand
+     * il est posé, en rebouclant sur `module - 1`. `rgb_scroll_step` (`0xA3F4`)
+     * et l'automate à quatre directions (`0x5C98`) le lisent aussi. Sa source
+     * est `b0[7]` de l'enregistrement par effet (`0x1172`) et, globalement,
+     * `[0x0315]` bit 7 (`0x1121`).
+     *
+     * Ici il est global, comme `[0x0315]`, et rangé dans
+     * `user_settings.ul_brightness` -- un octet que la structure partagée réserve
+     * à l'éclairage d'ambiance, que ce clavier n'a pas, et qu'aucun fichier
+     * partagé ne touche. Même raison que pour le mode de couleur : ne pas
+     * allonger `user_settings_t`, ce qui ferait retomber tous les réglages.
+     */
+    {
+        const uint8_t step = led_speeds[user_settings.led_speed];
+
+        if (user_settings.ul_brightness != 0) {
+            led_phase   = (uint8_t)(led_phase - step);
+            fx_phase192 = (uint8_t)((fx_phase192 + FX_PHASE192 - step) % FX_PHASE192);
+        } else {
+            led_phase   = (uint8_t)(led_phase + step);
+            fx_phase192 = (uint8_t)((fx_phase192 + step) % FX_PHASE192);
+        }
+    }
 
     switch (user_settings.led_effect) {
         case AULA_FX_RAIN:      rain_step();     break;
@@ -628,7 +669,7 @@ static void led_regen_one(void)
          * trame à l'autre. Six lignes x 25 couvrent 150 des 192 entrées, donc
          * un arc-en-ciel presque complet du haut vers le bas du clavier.
          */
-        const uint8_t hue = (uint8_t)((led_phase + (uint8_t)(regen_row * 25u)) %
+        const uint8_t hue = (uint8_t)((fx_phase192 + (uint8_t)(regen_row * 25u)) %
                                       AULA_RGB_WHEEL_SIZE);
 
         fx_color(hue, rgb);
@@ -696,13 +737,13 @@ static void led_regen_one(void)
          * comme à la vague.
          */
         if (user_settings.ul_effect >= AULA_FX_COLOR_WHEEL) {
-            const uint16_t p = (uint16_t)aula_fx_shimmer_phase(regen_col, regen_row, 1) + led_phase;
+            const uint16_t p = (uint16_t)aula_fx_shimmer_phase(regen_col, regen_row, 1) + fx_phase192;
 
             aula_rgb_wheel((uint8_t)(p % AULA_RGB_WHEEL_SIZE), rgb);
             aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
                          led_scale(rgb[2], gain));
         } else {
-            const uint16_t p = (uint16_t)aula_fx_shimmer_phase(regen_col, regen_row, 0) + led_phase;
+            const uint16_t p = (uint16_t)aula_fx_shimmer_phase(regen_col, regen_row, 0) + fx_phase192;
             const uint8_t  k = aula_fx_breath((uint8_t)(p % AULA_FX_BREATH_SIZE));
 
             aula_fx_color(user_settings.ul_effect, rgb);
@@ -830,6 +871,7 @@ void indicators_apply_defaults(void)
     user_settings.led_brightness = LED_BRIGHTNESS_DEFAULT;
     user_settings.led_speed      = LED_SPEED_DEFAULT;
     user_settings.ul_effect      = AULA_FX_COLOR_WHEEL; /* arc-en-ciel, comme en usine */
+    user_settings.ul_brightness  = 0;                   /* sens avant, bit 0x23 effacé */
 }
 
 void indicators_validate_settings(void)
@@ -845,6 +887,9 @@ void indicators_validate_settings(void)
     }
     if (user_settings.ul_effect >= AULA_FX_COLOR_MODES) {
         user_settings.ul_effect = AULA_FX_COLOR_WHEEL;
+    }
+    if (user_settings.ul_brightness > 1) {
+        user_settings.ul_brightness = 0;
     }
 }
 
@@ -865,6 +910,12 @@ void indicators_start(void)
 }
 
 /* ------------------------------------------------------- actions clavier */
+
+void indicators_toggle_direction(void)
+{
+    user_settings.ul_brightness = user_settings.ul_brightness ? 0 : 1;
+    settings_mark_dirty();
+}
 
 void indicators_next_color(void)
 {

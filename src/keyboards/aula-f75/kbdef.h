@@ -172,6 +172,7 @@ enum custom_keycodes {
     SPD_UP,               /* vitesse + */
     SPD_DN,               /* vitesse - */
     CLR_NEXT,             /* couleur suivante : 0-6 fixes, 7 arc-en-ciel */
+    DIR_TOG,              /* sens de défilement : le bit 0x23 d'usine */
 
     /*
      * Emplacements Bluetooth. Le transport lui-même vient de la glissière, pas

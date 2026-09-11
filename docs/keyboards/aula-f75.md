@@ -1725,8 +1725,43 @@ instruction par instruction :
 
 **`0xEDA2` porte une découverte** : ce n'est pas un simple incrément. Il teste le bit `0x23` —
 celui-là même que `0x1166` alimente depuis `b0[7]` de l'enregistrement par effet — et **décrémente**
-quand il est posé. C'est le **sens de défilement**, et il vaut pour tous les moteurs qui passent par
-cette fonction. Le portage ne l'expose pas ; il prend le sens avant, celui du bit à zéro.
+quand il est posé. C'est le **sens de défilement**.
+
+##### Le bit `0x23` — deux sources, trois consommateurs, et il est porté
+
+Une recherche exhaustive sur l'image donne **six sites**, et pas un de plus :
+
+| Site | Rôle |
+| --- | --- |
+| `0x1121` | `a = [0x0315] ; rlc a ; mov 0x23,c` — **source globale**, bit 7 du réglage persisté |
+| `0x1172` | même motif sur `0x0345 + effet*2` — **source par effet**, `b0[7]` |
+| `0x7474` | `clr 0x23` — l'onde concentrique **force le sens avant** |
+| `0xEF8A` | `clr 0x23` — le semeur `0xEF85` l'efface aussi |
+| `0xEDA2` | avance de la phase par touche : décrémente si posé, rebouclant sur `module - 1` |
+| `0xA3F4` | `rgb_scroll_step` : avance la position globale `[0x08C3]` d'un pas **par effet** (20 pour l'effet 10, 2 pour le 0x11, 1 sinon), en avant ou en arrière |
+| `0x5C98` | l'automate à quatre directions : deux sous-routines différentes selon le sens |
+
+Et `[0x0315]` se lit entièrement : **bits 3-0 le mode de couleur** (`0x1138` en extrait `& 0x0F` vers
+`[0x011C]`), **bit 7 le sens**. Le champ « sens » de la table des réglages trouve ainsi son
+consommateur, et `b0[7]` — longtemps « bit sans lecteur » — en trouve un second.
+
+Le portage l'expose désormais sous le keycode `DIR_TOG`, globalement comme `[0x0315]`, rangé dans
+`user_settings.ul_brightness` — même raison que pour le mode de couleur : un octet que la structure
+partagée réserve à l'éclairage d'ambiance, que ce clavier n'a pas.
+
+##### Un défaut trouvé en portant le sens : la couture de `led_phase`
+
+`led_phase` est un **octet** : il reboucle à 256. Les consommateurs dont le module divise 256 ne le
+voient pas — la vague replie à 128, la géométrie de SMK travaille sur 0-255. Mais l'arc-en-ciel
+vertical replie à **192** et le scintillement à 192 ou 96, et `256 % 192 = 64` : **à chaque
+rebouclage, leur teinte sautait d'un tiers de roue**. À la vitesse la plus lente, un saut visible
+toutes les dix secondes.
+
+Le firmware d'usine n'a pas ce défaut parce qu'il range la phase **par touche** et l'incrémente
+directement modulo 192 ou 96 — il n'a pas de compteur de trames sur huit bits.
+
+Un second compteur, `fx_phase192`, replié à 192 — que 96 divise — corrige les deux. Un octet de
+XDATA, et les deux modules deviennent sans couture.
 
 **`0xA177` porte la rampe de respiration** : `composante × CODE[0x29CE + phase] / 255`, 96 entrées,
 **22 → 255 sur quarante-huit pas puis le retour**. Son plancher n'est pas zéro mais 22 : en couleur
