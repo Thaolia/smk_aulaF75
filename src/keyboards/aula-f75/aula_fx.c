@@ -257,6 +257,91 @@ static const __code uint8_t keywave[AULA_FX_COLS][AULA_FX_ROWS] = {
     {0x03, 0x07, 0x0b, 0x0e, 0x12, 0x13}, /* colonne 14 */
 };
 
+/*
+ * SCINTILLEMENT -- champs de phase de l'effet d'usine 6, moteur `0x60C9`.
+ *
+ * Son semeur `0xA791` charge le plan par touche depuis l'une de DEUX tables,
+ * choisie par le mode de couleur `[0x011C]`, et les deux sont déjà rangées
+ * `colonne * 6 + ligne` : pas de transposition, contrairement à `0x9FEA`.
+ *
+ *   mode 7, arc-en-ciel  ->  CODE 0x2A2E, valeurs 1 à 191
+ *   modes 0 à 6, fixe    ->  CODE 0x2AAC, valeurs 0 à  95
+ *
+ * Les plages valident les modules que le moteur applique via `0xEDA2` : `0xC0`
+ * = 192 = 191 + 1 pour la roue, `0x60` = 96 = 95 + 1 pour la respiration. Le
+ * semeur choisit la table dont la plage est exactement celle du module.
+ *
+ * Les deux dessinent un chevron : lignes 0 à 2 une rampe, lignes 3 à 5 la rampe
+ * miroir. Seules les quinze colonnes de ce clavier sont recopiées.
+ */
+static const __code uint8_t shimmer_wheel[AULA_FX_COLS][AULA_FX_ROWS] = {
+    {  1,   1,   1, 191, 191, 191}, /* colonne  0 */
+    {  6,   6,   6, 190, 190, 190}, /* colonne  1 */
+    { 11,  11,  11, 188, 188, 188}, /* colonne  2 */
+    { 16,  16,  16, 185, 185, 185}, /* colonne  3 */
+    { 21,  21,  21, 180, 180, 180}, /* colonne  4 */
+    { 26,  26,  26, 175, 175, 175}, /* colonne  5 */
+    { 31,  31,  31, 170, 170, 170}, /* colonne  6 */
+    { 36,  36,  36, 165, 165, 165}, /* colonne  7 */
+    { 41,  41,  41, 160, 160, 160}, /* colonne  8 */
+    { 46,  46,  46, 155, 155, 155}, /* colonne  9 */
+    { 51,  51,  51, 150, 150, 150}, /* colonne 10 */
+    { 56,  56,  56, 145, 145, 145}, /* colonne 11 */
+    { 61,  61,  61, 140, 140, 140}, /* colonne 12 */
+    { 66,  66,  66, 135, 135, 135}, /* colonne 13 */
+    { 71,  71,  71, 130, 130, 130}, /* colonne 14 */
+};
+
+static const __code uint8_t shimmer_fixed[AULA_FX_COLS][AULA_FX_ROWS] = {
+    {  0,   0,   0,  84,  84,  84}, /* colonne  0 */
+    {  7,   7,   7,  77,  77,  77}, /* colonne  1 */
+    { 14,  14,  14,  70,  70,  70}, /* colonne  2 */
+    { 21,  21,  21,  63,  63,  63}, /* colonne  3 */
+    { 28,  28,  28,  56,  56,  56}, /* colonne  4 */
+    { 35,  35,  35,  49,  49,  49}, /* colonne  5 */
+    { 42,  42,  42,  42,  42,  42}, /* colonne  6 */
+    { 49,  49,  49,  35,  35,  35}, /* colonne  7 */
+    { 56,  56,  56,  28,  28,  28}, /* colonne  8 */
+    { 63,  63,  63,  21,  21,  21}, /* colonne  9 */
+    { 70,  70,  70,  14,  14,  14}, /* colonne 10 */
+    { 77,  77,  77,   7,   7,   7}, /* colonne 11 */
+    { 84,  84,  84,  95,  95,  95}, /* colonne 12 */
+    { 91,  91,  91,  91,  91,  91}, /* colonne 13 */
+    { 95,  95,  95,  84,  84,  84}, /* colonne 14 */
+};
+
+uint8_t aula_fx_shimmer_phase(uint8_t col, uint8_t row, uint8_t rainbow)
+{
+    if (col >= AULA_FX_COLS || row >= AULA_FX_ROWS) {
+        return 0;
+    }
+    return rainbow ? shimmer_wheel[col][row] : shimmer_fixed[col][row];
+}
+
+/*
+ * Rampe de respiration, CODE 0x29CE, 96 entrées -- lue par `0xA177`, qui
+ * applique `composante * rampe[phase] / 255` à la couleur fixe.
+ *
+ * C'est une respiration symétrique : 22 -> 255 sur quarante-huit pas, puis le
+ * retour. Son plancher n'est pas zéro mais 22 : en mode couleur fixe, une touche
+ * ne s'éteint jamais tout à fait.
+ *
+ * Elle se referme sur la table suivante : 0x29CE + 96 = 0x2A2E.
+ */
+static const __code uint8_t breath[AULA_FX_BREATH_SIZE] = {
+     22,  24,  27,  30,  33,  36,  39,  42,  45,  49,  53,  57,  61,  65,  69,  73,
+     77,  81,  85,  89,  94,  99, 104, 109, 114, 119, 124, 129, 134, 140, 146, 152,
+    158, 164, 170, 176, 182, 188, 194, 200, 206, 213, 220, 227, 234, 241, 248, 255,
+    255, 248, 241, 234, 227, 220, 213, 206, 200, 194, 188, 182, 176, 170, 164, 158,
+    152, 146, 140, 134, 129, 124, 119, 114, 109, 104,  99,  94,  89,  85,  81,  77,
+     73,  69,  65,  61,  57,  53,  49,  45,  42,  39,  36,  33,  30,  27,  24,  22,
+};
+
+uint8_t aula_fx_breath(uint8_t phase)
+{
+    return breath[phase % AULA_FX_BREATH_SIZE];
+}
+
 uint8_t aula_fx_keywave(uint8_t col, uint8_t row)
 {
     if (col >= AULA_FX_COLS || row >= AULA_FX_ROWS) {

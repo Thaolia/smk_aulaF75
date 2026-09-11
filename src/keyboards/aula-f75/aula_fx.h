@@ -80,6 +80,16 @@ uint8_t aula_fx_gaming(uint8_t col);
  * de la première ligne jusqu'à repasser par zéro entre les colonnes 12 et 13,
  * et décroît vers le bas à gauche. Une vague qui tourne, pas qui translate.
  */
+/*
+ * Phase par touche du scintillement (effet d'usine 6) : CODE 0x2A2E en mode
+ * arc-en-ciel, CODE 0x2AAC en couleur fixe. Rangées `colonne * 6 + ligne`.
+ */
+uint8_t aula_fx_shimmer_phase(uint8_t col, uint8_t row, uint8_t rainbow);
+
+/* Rampe de respiration, CODE 0x29CE : 96 entrées, 22 -> 255 -> 22. */
+#define AULA_FX_BREATH_SIZE 96
+uint8_t aula_fx_breath(uint8_t phase);
+
 uint8_t aula_fx_keywave(uint8_t col, uint8_t row);
 
 /* Tirage pseudo-aléatoire, 0-255. */

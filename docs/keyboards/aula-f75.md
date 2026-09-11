@@ -1706,13 +1706,63 @@ Les huit tables de cette région s'enchaînent sans un octet de jeu ni de recouv
 Chaque borne tombe exactement sur la suivante. C'est la validation croisée la plus forte de tout ce
 chapitre : huit tailles déduites séparément, aucune ne déborde, aucune ne laisse de trou.
 
-##### Ce que le portage en a, et ce qu'il n'a pas
+##### L'effet d'usine 6 est porté — `AULA_FX_SHIMMER`
 
-`0x9FEA` est porté et vérifié. Les deux frères **ne le sont pas**, et pour une raison de périmètre :
-ils appartiennent à l'effet d'usine 6, le scintillement à phase par touche, qui n'a **aucun
-équivalent** dans les treize effets du portage — celui qu'il appelle `AULA_FX_TWINKLE` transcrit
-l'effet 8, à semeur aléatoire. Les porter demanderait d'ajouter un quatorzième effet ; la donnée est
-là, le moteur est documenté, c'est une décision de conception.
+Les deux frères sont désormais dans le portage, avec leur moteur. Le moteur `0x60C9` a été décodé
+instruction par instruction :
+
+```asm
+0x60DE  a = [0x011C] ; cjne a,#7 -> 0x6191        ; aiguillage sur le mode de couleur
+; -- branche arc-en-ciel --
+0x6105  r5 = [0x0017 + colonne*6 + ligne]          ; la phase de CETTE touche
+0x6107  r7 = 0xC0 ; lcall 0xEDA2                   ; avance, module 192
+0x6150  dptr = 0x2B2A + phase*3                    ; la roue de teintes
+; -- branche couleur fixe --
+0x61B3  r7 = 0x60 ; lcall 0xEDA2                   ; avance, module 96
+0x61FD  dptr = 0xC800 + effet*21 + mode*3          ; la couleur fixe
+0x626A  dptr = 0x08C3 ; lcall 0xA177               ; gain de respiration
+```
+
+**`0xEDA2` porte une découverte** : ce n'est pas un simple incrément. Il teste le bit `0x23` —
+celui-là même que `0x1166` alimente depuis `b0[7]` de l'enregistrement par effet — et **décrémente**
+quand il est posé. C'est le **sens de défilement**, et il vaut pour tous les moteurs qui passent par
+cette fonction. Le portage ne l'expose pas ; il prend le sens avant, celui du bit à zéro.
+
+**`0xA177` porte la rampe de respiration** : `composante × CODE[0x29CE + phase] / 255`, 96 entrées,
+**22 → 255 sur quarante-huit pas puis le retour**. Son plancher n'est pas zéro mais 22 : en couleur
+fixe, une touche ne s'éteint jamais tout à fait.
+
+Le portage transcrit les trois tables — `0x2A2E`, `0x2AAC`, `0x29CE` — **vérifiées octet par octet**,
+et applique la même astuce que la vague : toutes les touches avançant du même pas, la phase courante
+vaut `semence + compteur de trames`, donc aucun état à tenir. Sa période vient de `CODE 0x3002`,
+celle que le semeur de l'effet 6 charge.
+
+> **Un décalage d'indice à connaître.** `AULA_FX_OFF` passe de 13 à 14. Un réglage enregistré qui
+> valait 13 — « éteint » — désigne maintenant le scintillement. Sans conséquence au-delà du premier
+> démarrage.
+
+##### Le bloc remonte encore, et deux tables de plus en sortent
+
+En cherchant la rampe de respiration, la borne `0x29CE + 96 = 0x2A2E` a tiré le fil vers l'amont. Le
+bloc contigu compte en réalité **onze** tables :
+
+| Adresse | Taille | Contenu | Fin |
+| --- | --- | --- | --- |
+| `0x2937` | 10 | rampe de luminosité globale | `0x2941` |
+| **`0x2941`** | **24** | **les sept couleurs fixes + le noir** — huit triplets | `0x2959` |
+| `0x2959` | 117 | couronnes de l'onde, 9 × 13 | `0x29CE` |
+| **`0x29CE`** | **96** | **rampe de respiration** | `0x2A2E` |
+| `0x2A2E` | 126 | phase du scintillement, mode 7 | `0x2AAC` |
+| `0x2AAC` | 126 | phase du scintillement, couleur fixe | `0x2B2A` |
+| `0x2B2A` | 576 | roue de teintes, 192 × 3 | `0x2D6A` |
+| `0x2D6A` | 3 | le blanc isolé | `0x2D6D` |
+| `0x2D6D` | 384 | seconde roue, 128 × 3 | `0x2EED` |
+| `0x2EED` | 126 | table A | `0x2F6B` |
+| `0x2F6B` | 126 | table B | `0x2FE9` |
+| `0x2FE9` | 75 | périodes, 15 × 5 | `0x3034` |
+
+`0x2941` est **une seconde copie de la palette de `0xC800`**, même ordre, avec le noir ajouté en
+huitième. Onze tables, **onze bornes exactes**, pas un octet de jeu de `0x2937` à `0x3034`.
 
 ##### Les six colonnes au-delà de 15 — un modèle de 113 touches
 

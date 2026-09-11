@@ -88,7 +88,8 @@ static const __code uint8_t led_speeds[] = {1, 2, 4, 8, 16};
 #define AULA_FX_KEYWAVE   ((uint8_t)(FX_COUNT + 6)) /* 10  0x82A5 */
 #define AULA_FX_VRAINBOW  ((uint8_t)(FX_COUNT + 7)) /* 11  0x9659 */
 #define AULA_FX_GAMING    ((uint8_t)(FX_COUNT + 8)) /* 12  0x1DAB -> 0x95A4 */
-#define AULA_FX_OFF       ((uint8_t)(FX_COUNT + 9)) /* 13 */
+#define AULA_FX_SHIMMER   ((uint8_t)(FX_COUNT + 9)) /* 13  0x60C9, effet d'usine 6 */
+#define AULA_FX_OFF       ((uint8_t)(FX_COUNT + 10))/* 14 */
 
 /*
  * Les six premiers de cette liste (REACTIVE à RIPPLE) partagent la MÊME
@@ -385,6 +386,7 @@ static void fx_reset(void)
  *   AULA_FX_KEYWAVE          15        0x82A5    `0x3025`
  *   AULA_FX_VRAINBOW         16        0x9659    `0x302A`
  *   AULA_FX_GAMING         0x20        0x95A4    AUCUNE -- image fixe : choix, celle de l'uni
+ *   AULA_FX_SHIMMER           6        0x60C9    `0x3002`
  *
  * Trois lignes sont donc un CHOIX et non une transcription ; elles sont
  * signalées comme telles. Les dix autres sont les octets du dump.
@@ -403,6 +405,7 @@ static const __code uint8_t fx_period_ms[AULA_FX_OFF][LED_SPEED_LEVELS] = {
     { 32,  24,  16,   8,   1}, /* KEYWAVE       -- CODE 0x3025                */
     { 46,  36,  26,  16,   6}, /* VRAINBOW      -- CODE 0x302A                */
     { 45,  35,  25,  15,   6}, /* GAMING        -- image fixe, choix          */
+    { 20,  15,  10,   5,   1}, /* SHIMMER       -- CODE 0x3002                */
 };
 
 /*
@@ -672,6 +675,40 @@ static void led_regen_one(void)
                          led_scale(rgb[2], gain));
         } else {
             aula_rgb_set(regen_row, regen_col, 0, 0, 0);
+        }
+    } else if (user_settings.led_effect == AULA_FX_SHIMMER) {
+        /*
+         * Scintillement -- effet d'usine 6, moteur `0x60C9`, transcrit.
+         *
+         * Chaque touche porte sa propre phase, semée par `0xA791` depuis l'une
+         * de deux tables selon le mode de couleur, et avance d'un pas par trame
+         * via `0xEDA2(phase, 0xC0 ou 0x60)`. Comme toutes les touches avancent
+         * du même pas, la phase courante vaut `semence + compteur de trames` :
+         * aucun état à tenir, la même astuce que la vague.
+         *
+         * En arc-en-ciel la phase indexe la roue modulo 192 ; en couleur fixe
+         * elle indexe la rampe de respiration modulo 96, et la couleur fixe est
+         * mise à l'échelle par cette rampe. Le moteur d'usine fait exactement
+         * ces deux choses, dans ces deux modules.
+         *
+         * `led_phase` avance de `led_speeds[vitesse]` et non de un : c'est le
+         * choix de ce portage, déjà expliqué plus haut, et il est appliqué ici
+         * comme à la vague.
+         */
+        if (user_settings.ul_effect >= AULA_FX_COLOR_WHEEL) {
+            const uint16_t p = (uint16_t)aula_fx_shimmer_phase(regen_col, regen_row, 1) + led_phase;
+
+            aula_rgb_wheel((uint8_t)(p % AULA_RGB_WHEEL_SIZE), rgb);
+            aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
+                         led_scale(rgb[2], gain));
+        } else {
+            const uint16_t p = (uint16_t)aula_fx_shimmer_phase(regen_col, regen_row, 0) + led_phase;
+            const uint8_t  k = aula_fx_breath((uint8_t)(p % AULA_FX_BREATH_SIZE));
+
+            aula_fx_color(user_settings.ul_effect, rgb);
+            aula_rgb_set(regen_row, regen_col, led_scale(led_scale(rgb[0], k), gain),
+                         led_scale(led_scale(rgb[1], k), gain),
+                         led_scale(led_scale(rgb[2], k), gain));
         }
     } else if (user_settings.led_effect == (uint8_t)FX_SOLID) {
         /*
