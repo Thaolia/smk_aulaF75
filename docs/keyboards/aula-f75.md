@@ -1,5 +1,28 @@
 # Epomaker × AULA F75 (modèle classique)
 
+> ## ✅ 2026-09-11 — premier flash réussi, bootloader préservé
+>
+> **Du code de ce dépôt a tourné sur l'appareil.** La carte `aula-f75-probe` — USB et retour ISP,
+> **aucun GPIO piloté** — a été écrite avec `sinowisp write -d aula-f75 --force`, et vérifiée par une
+> relecture complète :
+>
+> | Vérification | Résultat |
+> | --- | --- |
+> | énumération | `258a:010c` **`product="SMK Keyboard"`** |
+> | retour en ISP | **trois fois de suite** |
+> | bootloader | octets `61440`–`65535` **identiques** à `assets/f75_bootloader.bin` |
+> | zone applicative | **zéro octet** de différence avec l'image voulue |
+> | vue JTAG réelle | `0x0000 = 02 F0 00` → **le bootloader**, `0xEFFB = 02 00 DE` → l'entrée de SMK |
+>
+> Le vecteur de reset pointe sur le bootloader d'usine et le tremplin sur notre firmware : la
+> structure d'usine, avec notre code au bout. `sinowisp` pose le tremplin lui-même depuis le vecteur
+> de reset — il n'y avait rien à faire.
+>
+> **Tout le reste de cette page reste non vérifié sur matériel.** La sonde ne pilote aucun GPIO : la
+> matrice, le rétroéclairage, la radio, la veille et la polarité PWM n'ont été exercés par rien. Les
+> « transcrit », « établi » et « vérifié » de ce document parlent du dump et du désassemblage, pas de
+> l'appareil.
+
 > **État : portage incomplet, non compilable, jamais flashé.**
 > Le brochage n'est pas établi. `kbdef.h` refuse volontairement de compiler.
 
