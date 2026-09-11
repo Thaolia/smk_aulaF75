@@ -204,5 +204,13 @@ enum custom_keycodes {
      */
     RF_DIAG,
 
+    /*
+     * Mode « frappe automatique », sur `Fn + Espace` ET `Fn + appui molette`.
+     * Tape une lettre au hasard puis l'efface d'un retour arrière, toutes les
+     * 1 s ± 500 ms, jusqu'à ce qu'une touche quelconque l'arrête. Aucun
+     * équivalent d'usine. Voir `aula_macro.c`.
+     */
+    MACRO_TG,
+
     KB_SAFE_RANGE,
 };

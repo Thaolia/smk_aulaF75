@@ -7,6 +7,7 @@
 #include <stdbool.h>
 
 #include "aula_encoder.h"
+#include "aula_macro.h"
 #ifdef RF_EUART0
 #    include "aula_rf.h"
 #endif
@@ -61,6 +62,13 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
 {
     uint8_t slot;
 
+    /* Tant que la frappe automatique n'est pas revenue au repos, elle avale
+     * TOUT : c'est ce qui rend muette la touche qui l'arrête, et ce qui empêche
+     * le relâchement de la combinaison d'activation de l'arrêter aussitôt. */
+    if (aula_macro_intercept(key_pressed)) {
+        return false;
+    }
+
     switch (keycode) {
         case FX_NEXT:
             if (key_pressed) indicators_next_effect();
@@ -85,6 +93,9 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             return false;
         case DIR_TOG:
             if (key_pressed) indicators_toggle_direction();
+            return false;
+        case MACRO_TG:
+            if (key_pressed) aula_macro_arm();
             return false;
 #ifdef RF_EUART0
         case RF_DIAG:
@@ -126,6 +137,7 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
 void kb_update(void)
 {
     aula_encoder_task();
+    aula_macro_task();
 #ifdef RF_EUART0
     rf_task();
 #endif

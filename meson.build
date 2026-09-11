@@ -153,7 +153,8 @@ possible_src_keyboard = [
     'aula_rgb.c',
     'aula_fx.c',
     'aula_rf.c',
-    'aula_encoder.c'
+    'aula_encoder.c',
+    'aula_macro.c'
 ]
 
 possible_src_layout = [

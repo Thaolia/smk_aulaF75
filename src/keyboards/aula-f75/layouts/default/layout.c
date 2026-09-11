@@ -21,7 +21,8 @@
  *
  * La ROTATION de l'encodeur est hors matrice : phases sur P0.5 et P0.6, lues
  * par le poller @ 0x7928 (mov a,P0 ; swap ; rrc ; anl #0x03), appelé depuis le
- * tick. Non implémentée ici -- SMK n'a pas de support d'encodeur pour ce clavier.
+ * tick. Transcrite dans `aula_encoder.c` et confirmée sur l'appareil -- SMK n'a
+ * pas de support d'encodeur, elle est câblée à la main pour ce clavier.
  */
 
 // clang-format off
@@ -75,11 +76,11 @@ const uint16_t keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 
     /* _FN */
     [_FN] = LAYOUT_75_ansi(
-        _______,          KC_BRID, KC_BRIU, _______, _______, _______, _______, KC_MPRV, KC_MPLY, KC_MNXT, KC_MUTE, KC_VOLD, KC_VOLU, _______,
+        _______,          KC_BRID, KC_BRIU, _______, _______, _______, _______, KC_MPRV, KC_MPLY, KC_MNXT, KC_MUTE, KC_VOLD, KC_VOLU, MACRO_TG,
         RF_PAIR, LNK_BT1, LNK_BT2, LNK_BT3, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, KC_INS,
         _______, _______, _______, _______, RF_DIAG, _______, _______, KC_PSCR, KC_SCRL, KC_PAUS, _______, BRI_DN,  BRI_UP,  _______, _______,
         _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______,          _______, _______,
         _______, _______, _______, _______, _______, _______, _______, _______, FX_PREV, FX_NEXT, CLR_NEXT, DIR_TOG,        _______, KC_HOME,
-        _______, _______, _______,                            _______,                   _______, _______,          SPD_DN,  _______, SPD_UP
+        _______, _______, _______,                            MACRO_TG,                  _______, _______,          SPD_DN,  _______, SPD_UP
     ),
 };

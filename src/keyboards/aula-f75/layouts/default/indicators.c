@@ -9,6 +9,7 @@
 #include "aula_rgb.h"
 #include "aula_fx.h"
 #include "aula_encoder.h"
+#include "aula_macro.h"
 #ifdef RF_EUART0
 #    include "aula_rf.h"
 #endif
@@ -759,6 +760,11 @@ static bool rf_diag_paint(void)
 
 #endif /* RF_EUART0 */
 
+/* Rouge du témoin de frappe automatique. 48 sur 255, soit à peu près le second
+ * des dix crans de luminosité (51) : franchement visible dans le noir, jamais
+ * éblouissant, et sans rapport avec le rouge vif du diagnostic radio. */
+#define MACRO_RED_LEVEL 48
+
 static void led_regen_one(void)
 {
     const uint8_t gain = led_brightness_gain[user_settings.led_brightness];
@@ -778,20 +784,39 @@ static void led_regen_one(void)
      * continus -- vague, arc-en-ciel vertical, uni, géométrie de SMK -- ne le
      * faisaient pas et payaient une recherche de couleur pour rien.
      */
+    if (aula_fx_key_id(regen_col, regen_row) == AULA_FX_NO_KEY) {
+        /* Hissé en tête de chaîne : les overlays qui suivent peignent en dur, et
+         * peindre ces six trous allumerait des LED là où il n'y a pas de
+         * capuchon. */
+        aula_rgb_set(regen_row, regen_col, 0, 0, 0);
+        goto advance;
+    }
+
 #ifdef RF_EUART0
     if (rf_diag_on && rf_diag_paint()) {
         goto advance; /* cellule prise par le diagnostic */
     }
 #endif
 
-    if (aula_fx_key_id(regen_col, regen_row) == AULA_FX_NO_KEY ||
-        user_settings.led_effect >= AULA_FX_OFF) {
+    if (aula_macro_active()) {
         /*
-         * Pas de touche ici, ou effet éteint. Le second cas n'arrivait pas avant
-         * l'overlay : `indicators_update_step()` sautait tout le rendu quand
-         * l'effet valait AULA_FX_OFF. Il l'appelle maintenant pour peindre le
-         * diagnostic, donc ce chemin doit rendre du noir plutôt que de tomber
-         * dans la branche géométrique -- qui passerait l'indice 15 à
+         * Témoin de la frappe automatique : tout le clavier en rouge sourd, et
+         * le moteur d'effets court-circuité pour la durée. Comme le diagnostic,
+         * il ignore la luminosité utilisateur -- il doit rester visible réglage
+         * à zéro, et surtout effet ÉTEINT, qui est précisément l'état dans
+         * lequel on laisse le clavier tourner seul.
+         */
+        aula_rgb_set(regen_row, regen_col, MACRO_RED_LEVEL, 0, 0);
+        goto advance;
+    }
+
+    if (user_settings.led_effect >= AULA_FX_OFF) {
+        /*
+         * Effet éteint. Ce cas n'arrivait pas avant les overlays :
+         * `indicators_update_step()` sautait tout le rendu quand l'effet valait
+         * AULA_FX_OFF. Il l'appelle maintenant pour peindre le diagnostic et le
+         * témoin de macro, donc ce chemin doit rendre du noir plutôt que de
+         * tomber dans la branche géométrique -- qui passerait l'indice 15 à
          * `led_effect_index()`, dont l'énumération s'arrête à 3.
          */
         aula_rgb_set(regen_row, regen_col, 0, 0, 0);
@@ -966,9 +991,7 @@ static void led_regen_one(void)
                      led_scale(rgb[2], gain));
     }
 
-#ifdef RF_EUART0
 advance:
-#endif
     if (++regen_col >= LED_COLS) {
         regen_col = 0;
         if (++regen_row >= LED_ROWS) {
@@ -1028,6 +1051,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
      * ~400 µs -- et c'est à cette cadence que l'usine échantillonne aussi sa
      * molette, depuis son ISR PWM. */
     aula_encoder_sample();
+    aula_macro_tick();
 
     if (user_settings.led_effect == AULA_FX_REACTIVE ||
         user_settings.led_effect == AULA_FX_LAKE) {
@@ -1035,9 +1059,9 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
     }
 
 #ifdef RF_EUART0
-    if (rf_diag_on || user_settings.led_effect < AULA_FX_OFF) {
+    if (aula_macro_active() || rf_diag_on || user_settings.led_effect < AULA_FX_OFF) {
 #else
-    if (user_settings.led_effect < AULA_FX_OFF) {
+    if (aula_macro_active() || user_settings.led_effect < AULA_FX_OFF) {
 #endif
         led_regen_one();
 
