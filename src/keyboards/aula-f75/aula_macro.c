@@ -24,9 +24,10 @@
  * lui qui rattrape le cas « l'utilisateur n'appuie que sur Fn » pendant que le
  * mode tourne.
  */
-#define MACRO_OFF  0
-#define MACRO_WAIT 1
-#define MACRO_RUN  2
+#define MACRO_OFF   0
+#define MACRO_WAIT  1
+#define MACRO_RUN   2
+#define MACRO_FLUSH 3
 
 #define STEP_KEY_DOWN 0
 #define STEP_KEY_UP   1
@@ -147,7 +148,36 @@ static void macro_release_all(void)
 
 static void macro_cancel(void)
 {
+    /*
+     * Une lettre est À L'ÉCRAN si elle a été tapée et pas encore effacée,
+     * c'est-à-dire entre son appui et celui du retour arrière -- soit les
+     * sous-états STEP_KEY_UP et STEP_BSP_DOWN, et eux seuls. Dès que
+     * STEP_BSP_DOWN a émis son appui, l'effacement est parti : plus rien à
+     * rattraper. Et en STEP_KEY_DOWN rien n'a encore été tapé.
+     *
+     * Le calcul se fait AVANT `macro_release_all()`, qui remet `macro_letter`
+     * à zéro.
+     */
+    const bool letter_pending = (macro_step == STEP_KEY_UP || macro_step == STEP_BSP_DOWN);
+
     macro_release_all();
+
+    if (letter_pending) {
+        /*
+         * Le retour arrière de sortie ne peut PAS partir d'ici en un bloc :
+         * l'hôte ne sonde que toutes les millisecondes, et un appui suivi
+         * aussitôt de son relâchement serait écrasé dans le tampon d'endpoint
+         * sans jamais être vu. Il passe donc par la machine à états, avec le
+         * même temps de maintien que les frappes normales -- et une pause
+         * d'abord, pour laisser partir le relâchement que `macro_release_all()`
+         * vient d'émettre.
+         */
+        macro_step  = 0;
+        macro_state = MACRO_FLUSH;
+        macro_arm_timer(MACRO_HOLD);
+        return;
+    }
+
     macro_arm_timer(MACRO_WAIT_MAX);
     macro_state         = MACRO_WAIT;
     macro_go_after_wait = 0;
@@ -204,6 +234,27 @@ void aula_macro_task(void)
             macro_due   = 1; /* première frappe sans attendre */
         } else {
             macro_state = MACRO_OFF;
+        }
+        return;
+    }
+
+    if (macro_state == MACRO_FLUSH) {
+        if (!macro_due) {
+            return;
+        }
+        macro_due = 0;
+
+        if (macro_step == 0) {
+            add_key((uint8_t)KC_BACKSPACE);
+            send_keyboard_report();
+            macro_arm_timer(MACRO_HOLD);
+            macro_step = 1;
+        } else {
+            del_key((uint8_t)KC_BACKSPACE);
+            send_keyboard_report();
+            macro_arm_timer(MACRO_WAIT_MAX);
+            macro_state         = MACRO_WAIT;
+            macro_go_after_wait = 0;
         }
         return;
     }

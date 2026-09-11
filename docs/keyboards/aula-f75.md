@@ -120,6 +120,18 @@ bits 6 et 7 du complément seraient parasites). C'est lui qui rattrape `Fn`, inv
 **Aucune modification du cœur SMK n'a donc été nécessaire** — inutile d'exporter `matrix[]` ou
 `action_layer`, qui ne sont pas dans `matrix.h`.
 
+**L'effacement de sortie, et pourquoi il ne peut pas être synchrone.** À l'annulation, une lettre
+est *à l'écran* si elle a été tapée sans être encore effacée — les sous-états `STEP_KEY_UP` et
+`STEP_BSP_DOWN`, et eux seuls. Le mode doit alors envoyer le retour arrière qu'il n'a pas eu le temps
+d'envoyer, pour rendre le texte intact.
+
+Ce retour arrière **ne peut pas partir en bloc depuis l'annulation** : l'hôte ne sonde l'endpoint
+que toutes les millisecondes (`bInterval = 1`), et un appui suivi aussitôt de son relâchement serait
+écrasé dans le tampon d'endpoint sans jamais être vu. C'est le même piège que `MACRO_HOLD` documente
+pour les frappes normales. D'où un état `MACRO_FLUSH` dédié : une pause pour laisser partir le
+relâchement en cours, l'appui, le maintien, le relâchement — environ sept millisecondes, puis
+l'attente de relâchement complet.
+
 **Le garde-fou qui manquait.** Un état qui avale toutes les touches jusqu'au relâchement complet se
 verrouille définitivement si une touche reste collée : le clavier n'écrirait plus rien jusqu'au
 redémarrage. Cinq secondes d'attente maximum, puis retour au repos quoi qu'il arrive — et retour au
