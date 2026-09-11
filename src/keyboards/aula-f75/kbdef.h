@@ -217,5 +217,20 @@ enum custom_keycodes {
      */
     MACRO_TG,
 
+    /*
+     * Mode « compensation AZERTY », sur `Fn + Ctrl gauche`. Le clavier porte la
+     * disposition US International ; ce mode traduit chaque frappe pour un hôte
+     * réglé en AZERTY français. Non persisté : il repart éteint au démarrage.
+     * Voir `aula_layout.c`.
+     */
+    LAYOUT_AZ,
+
+    /*
+     * `€` sur `Fn + E`. Visé pour un hôte FRANÇAIS, où c'est AltGr+E -- donc
+     * indépendant de LAYOUT_AZ. Sur un hôte US International, `€` est AltGr+5 et
+     * ce raccourci sortirait un `e`.
+     */
+    EURO,
+
     KB_SAFE_RANGE,
 };

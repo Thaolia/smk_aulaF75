@@ -9,6 +9,13 @@
 static uint8_t real_mods = 0;
 static uint8_t weak_mods = 0;
 
+/* Masque ET sur `real_mods` seul, jamais sur `weak_mods` : il sert a RETIRER du
+ * rapport un modificateur que le doigt tient vraiment, pendant qu'une couche de
+ * traduction en injecte un autre par `weak_mods`. Sur un hote AZERTY, le `!` du
+ * clavier US est Maj+1 alors que le `!` francais est sans Maj : sans masque, la
+ * touche sortirait `1`. Neutre a 0xFF tant que personne ne s'en sert. */
+static uint8_t mods_mask = 0xFF;
+
 report_keyboard_t keyboard_report;
 report_keyboard_t last_report;
 
@@ -37,7 +44,7 @@ void send_keyboard_report()
 
 void send_6kro_report()
 {
-    keyboard_report.mods = real_mods;
+    keyboard_report.mods = real_mods & mods_mask;
     keyboard_report.mods |= weak_mods;
 
     if (memcmp(&keyboard_report, &last_report, sizeof(report_keyboard_t)) != 0) {
@@ -52,7 +59,7 @@ void send_6kro_report()
 void send_nkro_report()
 {
     nkro_report.report_id = REPORT_ID_NKRO; // TODO: set this more permanently
-    nkro_report.mods      = real_mods;
+    nkro_report.mods      = real_mods & mods_mask;
     nkro_report.mods |= weak_mods;
 
     if (memcmp(&nkro_report, &last_nkro_report, sizeof(report_nkro_t)) != 0) {
@@ -232,6 +239,15 @@ void clear_mods(void)
 uint8_t get_weak_mods(void)
 {
     return weak_mods;
+}
+void set_weak_mods(uint8_t mods)
+{
+    weak_mods = mods;
+}
+
+void set_mods_mask(uint8_t mask)
+{
+    mods_mask = mask;
 }
 
 uint8_t biton(uint8_t bits)

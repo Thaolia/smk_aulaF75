@@ -11,6 +11,7 @@
 #include "aula_encoder.h"
 #include "aula_macro.h"
 #include "aula_status.h"
+#include "aula_layout.h"
 #ifdef RF_EUART0
 #    include "aula_rf.h"
 #endif
@@ -1163,6 +1164,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
      * molette, depuis son ISR PWM. */
     aula_encoder_sample();
     aula_macro_tick();
+    aula_layout_tick();
 
     if (aula_macro_active()) {
         if (!macro_was_on) {
@@ -1179,9 +1181,11 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
     }
 
 #ifdef RF_EUART0
-    if (aula_macro_active() || caps_on || rf_diag_on || user_settings.led_effect < AULA_FX_OFF) {
+    if (aula_macro_active() || caps_on || aula_status_lit() || rf_diag_on ||
+        user_settings.led_effect < AULA_FX_OFF) {
 #else
-    if (aula_macro_active() || caps_on || user_settings.led_effect < AULA_FX_OFF) {
+    if (aula_macro_active() || caps_on || aula_status_lit() ||
+        user_settings.led_effect < AULA_FX_OFF) {
 #endif
         led_regen_one();
 

@@ -30,6 +30,9 @@
 #define AULA_STATUS_SLEEP_IN  6 /* entrée en veille          : fondu sortant  */
 #define AULA_STATUS_SLEEP_OUT 7 /* sortie de veille          : fondu entrant  */
 #define AULA_STATUS_LOW_BATT  8 /* batterie faible           : pulsation lente*/
+#define AULA_STATUS_AZERTY_ON  9 /* mode AZERTY allumé       : 4 éclats courts*/
+#define AULA_STATUS_AZERTY_OFF 10 /* mode AZERTY éteint      : 1 éclat court  */
+#define AULA_STATUS_AZERTY    11 /* mode AZERTY actif        : lueur faible fixe */
 #define AULA_STATUS_NONE      0xFF
 
 /* Depuis la boucle principale : joue un motif, en écrasant celui en cours. */
@@ -45,6 +48,23 @@ void aula_status_poll(uint8_t link, bool connected, bool low_batt);
 /* Vrai tant qu'un motif PONCTUEL joue. Les motifs en boucle -- appairage,
  * batterie faible -- ne comptent pas : ils ne finissent jamais. */
 bool aula_status_busy(void);
+
+/*
+ * Témoin permanent du mode AZERTY. C'est un ÉTAT de repos, comme la batterie
+ * faible -- et sur une LED blanche unique deux états de repos ne se distinguent
+ * pas. La priorité est donc tranchée ici, une fois pour toutes :
+ *
+ *   batterie faible  >  AZERTY actif  >  éteint
+ *
+ * La batterie passe devant : elle est urgente, alors que le mode AZERTY reste
+ * annoncé par son motif de basculement.
+ */
+void aula_status_set_azerty(bool on);
+
+/* Vrai dès que le voyant montre quelque chose, motif ponctuel ou état de repos.
+ * Sert de porte au rendu : sans elle, les motifs seraient invisibles
+ * rétroéclairage éteint -- justement quand on les regarde. */
+bool aula_status_lit(void);
 
 /* Depuis l'ISR, au bouclage du balayage de régénération (~37,9 ms). */
 void aula_status_tick(void);

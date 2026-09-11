@@ -20,12 +20,15 @@
  *   AULA_STATUS_SLEEP_IN     fondu sortant          21 pas  0.80 s
  *   AULA_STATUS_SLEEP_OUT    fondu entrant          11 pas  0.42 s
  *   AULA_STATUS_LOW_BATT     pulsation lente        40 pas  1.52 s  (boucle)
+ *   AULA_STATUS_AZERTY_ON    4 éclats courts        24 pas  0.91 s
+ *   AULA_STATUS_AZERTY_OFF   1 éclat court           5 pas  0.19 s
+ *   AULA_STATUS_AZERTY       lueur faible fixe       1 pas           (boucle)
  *
  * Tout tient dans un seul tableau plat avec des tables d'offset et de longueur :
  * un tableau de pointeurs `__code` coûterait plus de flash et une indirection de
  * plus à chaque pas, pour rien.
  */
-static const __code uint8_t pat_data[197] = {
+static const __code uint8_t pat_data[227] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255,   0,   0,
       0,   0,   0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -43,14 +46,23 @@ static const __code uint8_t pat_data[197] = {
      40,  28,  18,  10,   4,   0,   0,   0,   0,   0,   0,   0,
       0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
       0,   0,   0,   0,   0,
+    /* AZERTY_ON : quatre éclats courts, 3 pas allumés / 3 éteints. */
+    255, 255, 255,   0,   0,   0, 255, 255, 255,   0,   0,   0,
+    255, 255, 255,   0,   0,   0, 255, 255, 255,   0,   0,   0,
+    /* AZERTY_OFF : un seul éclat court. */
+    255, 255, 255,   0,   0,
+    /* AZERTY : un unique pas en boucle, donc une lueur fixe. Assez faible pour
+     * ne pas se confondre avec un éclat, assez visible dans le noir. */
+     40,
 };
 
-static const __code uint8_t pat_off[9] = {0, 16, 33, 61, 69, 93, 125, 146, 157,};
-static const __code uint8_t pat_len[9] = {16, 17, 28, 8, 24, 32, 21, 11, 40,};
+static const __code uint8_t pat_off[12] = {0,  16, 33,  61,  69,  93,
+                                           125, 146, 157, 197, 221, 226,};
+static const __code uint8_t pat_len[12] = {16, 17, 28, 8, 24, 32, 21, 11, 40, 24, 5, 1,};
 
-/* Bit N à 1 : le motif N boucle au lieu de se terminer. Neuf motifs, donc neuf
- * bits : le masque ne tient PAS dans un octet. */
-#define PAT_LOOPING 0x0108u
+/* Bit N à 1 : le motif N boucle au lieu de se terminer. Douze motifs, donc
+ * douze bits : le masque ne tient PAS dans un octet. */
+#define PAT_LOOPING 0x0908u
 
 #define PAT_LOOPS(p) ((PAT_LOOPING & (uint16_t)(1u << (p))) != 0u)
 
@@ -63,6 +75,7 @@ static __xdata uint8_t prev_link = 0xFF;
 static __bit           prev_conn;
 static __bit           prev_low;
 static __bit           low_batt;
+static __bit           az_rest;
 
 void aula_status_event(uint8_t event)
 {
@@ -74,11 +87,36 @@ void aula_status_event(uint8_t event)
     ET2    = 1;
 }
 
-/* Ce qui reste à l'écran quand aucun motif ponctuel ne joue. */
+/* Ce qui reste à l'écran quand aucun motif ponctuel ne joue. La priorité est
+ * documentée dans `aula_status.h` : deux états de repos sur une LED blanche
+ * unique ne se distinguent pas, il faut donc en choisir un. */
 static void status_rest(void)
 {
-    st_pat = low_batt ? (uint8_t)AULA_STATUS_LOW_BATT : (uint8_t)AULA_STATUS_NONE;
+    if (low_batt) {
+        st_pat = AULA_STATUS_LOW_BATT;
+    } else if (az_rest) {
+        st_pat = AULA_STATUS_AZERTY;
+    } else {
+        st_pat = AULA_STATUS_NONE;
+    }
     st_pos = 0;
+}
+
+void aula_status_set_azerty(bool on)
+{
+    az_rest = on ? 1 : 0;
+    if (!aula_status_busy()) {
+        /* Le motif de basculement est posté juste après par `aula_layout.c` ; ce
+         * repos est celui qu'il trouvera en finissant. */
+        ET2 = 0;
+        status_rest();
+        ET2 = 1;
+    }
+}
+
+bool aula_status_lit(void)
+{
+    return st_pat != AULA_STATUS_NONE;
 }
 
 bool aula_status_busy(void)

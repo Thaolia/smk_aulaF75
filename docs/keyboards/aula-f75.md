@@ -289,6 +289,102 @@ ici même.
 
 
 
+## Compensation AZERTY — création, et les deux portes qui manquaient au coeur SMK
+
+`Fn + Ctrl gauche` (`LAYOUT_AZ`) fait traduire chaque frappe par le clavier : les capuchons portent
+l'**US International**, l'hôte est réglé en **AZERTY français (Windows fr-FR)**. Aucun équivalent
+d'usine. Voir `src/keyboards/aula-f75/aula_layout.c`.
+
+### Ce que l'hôte français sait déjà faire — et qui a évité d'écrire une table de composition
+
+Quatre des cinq touches mortes d'US International ont un **équivalent mort côté fr-FR**. Pour
+celles-là, le clavier émet la touche morte de l'hôte et **c'est l'hôte qui compose** : zéro état,
+zéro table de combinaisons.
+
+| Touche morte US Intl | Équivalent fr-FR émis | Donne |
+| --- | --- | --- |
+| `^` (Maj+6) | `KC_LEFT_BRACKET` | `â ê î ô û` |
+| `"` (Maj+`'`) | Maj + `KC_LEFT_BRACKET` | `ä ë ï ö ü ÿ` |
+| `` ` `` | AltGr + `KC_7` | `à è ù` |
+| `~` (Maj+`` ` ``) | AltGr + `KC_2` | `ñ ã õ` |
+
+**Seul l'accent aigu a demandé une machine à états** : le fr-FR n'a aucune touche morte aiguë, `é` y
+est une touche à part entière. D'où la résolution en dur `e → KC_2`, `c → KC_9`, `Espace → KC_4`, et
+le repli d'US International — l'apostrophe puis le caractère — pour tout le reste. `á í ó ú ý` ne
+sont **pas produisibles** sur cette disposition cible.
+
+### `weak_mods` était un mécanisme à moitié construit
+
+`src/smk/report.c` lit `weak_mods` dans les **deux** chemins d'émission (6KRO et NKRO) pour le
+joindre à `real_mods`... mais **aucun setter n'était exporté**, et aucun masque n'existait. Le
+mécanisme était inatteignable. Deux ajouts, du même registre que les `extern` déjà posés dans
+`matrix.h` :
+
+```c
+void set_weak_mods(uint8_t mods);   /* la porte qui manquait */
+void set_mods_mask(uint8_t mask);   /* ET sur real_mods, 0xFF au repos */
+```
+
+Le masque est indispensable et ne porte que sur `real_mods` : il sert à **retirer** du rapport un
+modificateur que le doigt tient vraiment. Sur un hôte AZERTY, le `!` est **sans Maj** alors que le
+clavier le porte en `Maj+1` — sans masque, la touche sortirait `1`.
+
+⚠️ **Le masque doit être appliqué aux DEUX chemins.** Oublier le NKRO ne se verrait qu'en NKRO,
+c'est-à-dire dans le mode **par défaut** de ce firmware.
+
+### La garde des raccourcis se lit sur `real_mods`, jamais sur le rapport
+
+Quand un modificateur **autre que Maj** est tenu, seule la position de la touche est traduite : rien
+n'est injecté ni masqué. `Ctrl+A` devient `Ctrl+KC_Q`, `Ctrl+1` reste `Ctrl+1`.
+
+La décision se prend sur `get_mods()` — l'état **physique** — et **avant toute écriture**. Une garde
+qui lirait le rapport se déclencherait sur sa **propre** injection d'AltGr, que Windows voit comme
+`Ctrl+Alt` : le caractère suivant d'un roulement, ou la répétition automatique, basculerait tout seul
+dans la voie des raccourcis.
+
+Les bits ne se devinent pas : `MOD_BIT(code) = 1 << (code & 7)`, donc `LAlt` vaut `0x04` et **AltGr
+(`RAlt`) vaut `0x40`**. Masquer le mauvais casserait `Alt+Tab` en mode AZERTY.
+
+### Pourquoi le relâchement doit se souvenir du keycode émis
+
+Le suivi (`az_t_us[]` / `az_t_kc[]`) ne sert pas qu'à compter. Le relâchement doit retirer du rapport
+le keycode **réellement émis**, pas le retraduire : lâcher Maj avant la touche suffit à changer la
+traduction. `Maj+1` émet `!` = `KC_SLASH` ; un relâchement retraduit verrait l'état sans Maj et
+retirerait `KC_1` — **touche collée**.
+
+### La file d'émission, et pourquoi elle ne sert qu'au repli
+
+La voie normale garde la tenue naturelle : l'appui tient le keycode traduit, donc la **répétition
+automatique** de l'hôte fonctionne, et l'injection au repos est celle du dernier appui, rendue quand
+la dernière touche traduite est relâchée.
+
+Le repli de l'accent aigu, lui, doit émettre **deux** caractères pour un seul appui — impossible en
+synchrone, l'hôte sonde toutes les millisecondes (`bInterval = 1`) et un appui suivi de son
+relâchement dans le même passage ne serait jamais vu. D'où la file, jouée par `aula_layout_task()`
+avec le même `HOLD`/`GAP` qu'`aula_encoder.c`. Tant qu'elle joue, **tout appui passe par elle** :
+sinon un caractère naturel passerait devant un caractère synthétique encore en vol.
+
+### Le témoin, et le conflit qu'il a révélé
+
+Le témoin permanent est un **état de repos** du voyant d'état — et `status_rest()` en avait déjà un :
+la batterie faible. **Deux états de repos sur une LED blanche unique ne se distinguent pas.** La
+priorité est donc tranchée dans `aula_status.h`, pas au clavier :
+
+```
+batterie faible  >  AZERTY actif  >  éteint
+```
+
+Au passage, la porte de rendu d'`indicators_update_step()` ne contenait **aucune** condition sur le
+voyant d'état : tous ses motifs étaient invisibles rétroéclairage éteint — justement l'état dans
+lequel on les regarde. `aula_status_lit()` la corrige pour les douze motifs, pas seulement les trois
+nouveaux.
+
+### `€` sur `Fn + E`
+
+`AltGr + KC_E`, indépendant du mode : c'est `€` sur tout hôte français. ⚠️ Sur un hôte US
+International, `€` est `AltGr + 5` et ce raccourci sortirait un `e`.
+
+
 ## `AULA_FX_LAKE` — l'onde qui part de la touche frappée
 
 ⚠️ **Cet effet n'est PAS une transcription.** Rien d'équivalent n'existe dans le firmware d'usine :

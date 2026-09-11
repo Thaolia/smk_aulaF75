@@ -95,6 +95,9 @@ void    add_mods(uint8_t mods);
 void    del_mods(uint8_t mods);
 void    set_mods(uint8_t mods);
 void    clear_mods(void);
+uint8_t get_weak_mods(void);
+void    set_weak_mods(uint8_t mods);
+void    set_mods_mask(uint8_t mask);
 
 /* Consumer Page (0x0C)
  *
