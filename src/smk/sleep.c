@@ -98,6 +98,12 @@ void sleep_task(void)
         if (mode != USER_SLEEP_RF) {
             sleep_note_activity();
         }
+        user_sleep_cancel();
+        return;
+    }
+
+    // The board may need a moment before the display stops - see user_sleep.h.
+    if (!user_sleep_ready()) {
         return;
     }
 

@@ -6,6 +6,7 @@
 #include "usb.h"
 #include "usbhw.h"
 #include "keyboard.h"
+#include "aula_status.h"
 #include "settings.h"
 #include "debug.h"
 #include <string.h>
@@ -1371,6 +1372,10 @@ void rf_task(void)
     keyboard_state.battery_level = (uint8_t)(((uint16_t)batt_shown * 7u) / 100u);
     keyboard_state.low_power     = batt_low ? 1 : 0;
 
+    /* Le voyant d'état suit ces trois-là. Toute la détection de front vit dans
+     * `aula_status.c` : ici on ne fait que publier. */
+    aula_status_poll(keyboard_state.rf_link, link_connected, batt_low);
+
     rf_diag_state[RF_DIAG_P74]    = P7_4 ? 1 : 0;
     rf_diag_state[RF_DIAG_P45]    = P4_5 ? 1 : 0;
     rf_diag_state[RF_DIAG_P47]    = P4_7 ? 1 : 0;
@@ -1469,5 +1474,9 @@ void rf_request_pairing(void)
 {
     if (rf_is_wireless()) {
         rf_queue_link(RF_LINK_PAIRING);
+        /* Motif en boucle : il tient jusqu'à ce que la liaison s'établisse, et
+         * c'est alors le front de `connected` qui le remplace par la
+         * respiration de confirmation. */
+        aula_status_event(AULA_STATUS_PAIRING);
     }
 }

@@ -4,6 +4,7 @@
 #include "user_matrix.h"
 #include "gpio.h"
 #include "extint.h"
+#include "aula_status.h"
 
 #ifdef RF_EUART0
 #    include "aula_rf.h"
@@ -102,8 +103,46 @@ void user_sleep_prepare(void)
     extint_wake_arm(); /* IENC=0xF3, EXF0=0x40, EX4=1 -- mêmes valeurs qu'en usine */
 }
 
+/*
+ * Le motif d'endormissement doit jouer AVANT que `sleep_task()` ne coupe le tick
+ * et le PWM -- après, plus rien ne s'affiche. D'où ces trois états plutôt qu'un
+ * simple drapeau : `ARMED` lance le fondu et fait patienter la veille, `DONE`
+ * la laisse partir, et `user_sleep_cancel()` remet à `IDLE` dès que la veille
+ * n'est plus due, ce qui rattrape le cas où l'utilisateur interrompt
+ * l'endormissement pendant le fondu.
+ */
+#define SLEEP_ANIM_IDLE  0
+#define SLEEP_ANIM_ARMED 1
+#define SLEEP_ANIM_DONE  2
+
+static __xdata uint8_t sleep_anim;
+
+bool user_sleep_ready(void)
+{
+    if (sleep_anim == SLEEP_ANIM_IDLE) {
+        aula_status_event(AULA_STATUS_SLEEP_IN);
+        sleep_anim = SLEEP_ANIM_ARMED;
+        return false;
+    }
+    if (sleep_anim == SLEEP_ANIM_ARMED) {
+        if (aula_status_busy()) {
+            return false;
+        }
+        sleep_anim = SLEEP_ANIM_DONE;
+    }
+    return true;
+}
+
+void user_sleep_cancel(void)
+{
+    sleep_anim = SLEEP_ANIM_IDLE;
+}
+
 void user_sleep_wake(void)
 {
+    sleep_anim = SLEEP_ANIM_IDLE;
+    aula_status_event(AULA_STATUS_SLEEP_OUT);
+
     extint_wake_disable();
     user_gpio_init();
 #ifdef RF_EUART0

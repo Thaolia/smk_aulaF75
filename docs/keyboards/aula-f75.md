@@ -137,9 +137,51 @@ scan du dump (non concluant : un scan d'octets sans alignement d'instruction con
 `ANL`, avec un `MOV P7.5,C`) puis par un test de cinq broches libres, tous deux inutiles.
 
 Conséquence de rendu : cette cellule doit être peinte **explicitement, canal par canal**. Sans ça les
-effets font clignoter les deux voyants au hasard — ce qu'ils faisaient depuis le premier flash. Le
-voyant `Échap`/`F1` est tenu éteint : rien n'est établi sur ce qu'il signifie en usine, et lui
-inventer un sens serait de la décoration.
+effets font clignoter les deux voyants au hasard — ce qu'ils faisaient depuis le premier flash.
+
+### Le voyant `Échap`/`F1` : une LED blanche, donc du rythme et rien d'autre
+
+Mesuré : les canaux **vert** et **bleu** allument la **même LED blanche** et leurs intensités
+**s'ajoutent**. Il n'y a ni couleur ni second voyant à exploiter — les trois « niveaux » visibles au
+sondage sont simplement trois points d'une échelle continue. Les motifs ne peuvent donc se
+distinguer que par leur **rythme**, d'où un, deux ou trois éclats pour les trois transports : compter
+des éclats se lit d'un coup d'oeil, une différence de durée non.
+
+`aula_status.c` porte le lecteur de motifs. Neuf motifs en `__code`, 197 octets, dans un **seul
+tableau plat** avec des tables d'offset et de longueur : un tableau de pointeurs `__code` coûterait
+plus de flash et une indirection de plus à chaque pas.
+
+**Un pas = un bouclage du balayage de régénération**, ~37,9 ms. Même contrainte que le coeur de la
+frappe automatique, et pour la même raison : les quatre-vingt-dix cellules sont repeintes une par
+sous-trame, donc changer la valeur ailleurs qu'au bouclage la ferait tomber au milieu d'un cycle de
+repeinte.
+
+⚠️ Le masque des motifs en boucle vaut `0x0108` — **neuf motifs, donc neuf bits**. Il ne tient pas
+dans un octet ; la première rédaction le déclarait en `uint8_t` et perdait silencieusement la
+batterie faible.
+
+### Le motif d'endormissement a demandé trois lignes dans le coeur de SMK
+
+`sleep_task()` (`src/smk/sleep.c`) coupe le tick et le PWM **avant** d'appeler `user_sleep_prepare()`
+: plus rien ne s'affiche à partir de là, donc un fondu d'endormissement ne peut pas y jouer.
+
+L'interface de veille gagne deux crochets, implémentés par les six claviers :
+
+| Crochet | Rôle |
+| --- | --- |
+| `bool user_sleep_ready(void)` | rendre `false` retarde la veille d'un passage de boucle, moteur d'affichage toujours vivant |
+| `void user_sleep_cancel(void)` | appelé à chaque passage où la veille n'est **pas** due |
+
+`user_sleep_cancel()` n'est pas cosmétique : sans lui, un endormissement interrompu par une frappe
+en plein fondu laisserait la machine à états de la carte armée, et **le prochain endormissement
+partirait sans motif**. Les cinq autres claviers rendent `true` et ne font rien.
+
+### Ce qui n'est pas signalé, et pourquoi
+
+La **charge**. Le firmware d'usine la lit sur `P7.6`/`P7.7` avec un anti-rebond à deux seuils
+(`0x9723`–`0x97AA`) dont cette page dit seulement « *inféré* : en charge et charge terminée ». Tant
+que ce n'est pas décodé, l'afficher serait afficher une supposition — décision prise avec
+l'utilisateur.
 
 ⚠️ **Filaire uniquement, et c'est structurel.** En 2,4 GHz et en Bluetooth, `rf_radio_on()` appelle
 `usb_hw_deinit()` : `usb_ep0_out_irq()` ne tourne plus, et **rien dans le protocole EUART0 décodé à

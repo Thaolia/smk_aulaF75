@@ -10,6 +10,7 @@
 #include "aula_fx.h"
 #include "aula_encoder.h"
 #include "aula_macro.h"
+#include "aula_status.h"
 #ifdef RF_EUART0
 #    include "aula_rf.h"
 #endif
@@ -840,8 +841,10 @@ static __bit           macro_was_on;
  * Sans ça les effets font clignoter les deux voyants au hasard -- ce qu'ils
  * faisaient depuis le premier flash.
  *
- * Le voyant Échap/F1 (vert et bleu) reste ÉTEINT : rien n'est établi sur ce
- * qu'il signifie en usine, et lui inventer un sens serait de la décoration.
+ * Le voyant Échap/F1 (vert et bleu) porte les motifs d'état : transport,
+ * appairage, veille, batterie faible. Voir `aula_status.c`. Les deux canaux
+ * allument la MÊME LED blanche et leurs intensités s'ajoutent -- il n'y a ni
+ * couleur ni second voyant à exploiter, seulement du rythme.
  */
 #define CAPS_ROW 0
 #define CAPS_COL 14
@@ -884,9 +887,12 @@ static void led_regen_one(void)
 
     if (regen_row == CAPS_ROW && regen_col == CAPS_COL) {
         /* Voyants d'état : jamais peints par les effets ni par le cœur de la
-         * frappe automatique. Rouge = Verr. Maj ; vert et bleu tenus à zéro pour
-         * garder éteint le voyant Échap/F1. */
-        aula_rgb_set(regen_row, regen_col, caps_on ? (uint8_t)CAPS_LEVEL : (uint8_t)0, 0, 0);
+         * frappe automatique. Rouge = Verr. Maj ; vert et bleu = le voyant
+         * Échap/F1, la même valeur sur les deux puisqu'ils s'additionnent sur
+         * une LED unique. */
+        const uint8_t st = aula_status_level();
+
+        aula_rgb_set(regen_row, regen_col, caps_on ? (uint8_t)CAPS_LEVEL : (uint8_t)0, st, st);
         goto advance;
     }
 
@@ -1099,6 +1105,7 @@ advance:
             if (++macro_beat >= MACRO_HEART_STEPS) {
                 macro_beat = 0;
             }
+            aula_status_tick();
             /* La phase avance DANS la porte de trame, comme en usine : le rendu
              * d'usine est entièrement conditionné à `tic >= période`. */
             spark_decay_due = fx_frame_advance();
