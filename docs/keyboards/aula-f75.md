@@ -1,5 +1,89 @@
 # Epomaker × AULA F75 (modèle classique)
 
+
+## La couche Fn d'usine, décodée — et ce qu'elle confirme
+
+`CODE 0xCC00` est la **couche de base**, `CODE 0xD000` la **couche Fn** : quatre octets par touche,
+indexés `colonne × 6 + ligne`. La preuve tient en une position : l'index 44 (colonne 7, ligne 2, la
+touche **U**) porte l'usage `0x18` = U dans la première, et `0x46` = **Impr.écran** dans la seconde.
+
+C'est un utilisateur du clavier qui a mis sur la piste — « Fn + U faisait capture d'écran ». Le dump
+lui donne raison à l'octet près.
+
+### Ce que la couche Fn valide, indépendamment
+
+Les enregistrements de `b0 = 0x07` sont ceux du **répartiteur de raccourcis** `0x412C`, dont `b3` est
+la clé. Leur contenu recoupe **exactement** la table `0x4136` décodée séparément :
+
+| Position | `b3` | Clé de la table `0x4136` | Rôle déjà établi |
+| --- | --- | --- | --- |
+| Fn + `Échap` | `0x04` | `0x41B3` | **réinitialisation d'usine** (appui long) |
+| Fn + `1` | `0x05` | `0x41C8` | emplacement Bluetooth 1 |
+| Fn + `2` | `0x06` | `0x41FE` | emplacement Bluetooth 2 |
+| Fn + `3` | `0x07` | `0x4233` | emplacement Bluetooth 3 |
+| Fn + `` ` `` | `0x08` | `0x426A` | **relance d'appairage** |
+
+Cinq clés, cinq arms, dans le même ordre. La table des raccourcis avait été lue depuis le
+répartiteur inline ; la voilà confirmée depuis les **données de disposition**, une source qui n'a
+rien à voir.
+
+De même, `b0 = 0x08` renvoie au répartiteur de classe `0xA674` sur `b1`, et les positions collent :
+`b1 = 3` avec `b2` à 1 ou 2 sur Fn + `Haut`/`Bas` et Fn + `F5`/`F6`, `b1 = 4` avec `b2` à 1 ou 2 sur
+Fn + `Droite`/`Gauche`. Deux paires « + / − » sur deux classes distinctes, exactement la forme
+attendue pour la luminosité et la vitesse. Et Fn + `F4` porte `b1 = 8`, la classe dont le répartiteur
+fait `lcall 0x91D3` — **la restauration des couleurs par défaut**.
+
+### Correction : `b0 = 0x0D` est la touche Fn elle-même
+
+Cette page attribuait à `0x0D` « deux bits d'état tenus », en notant que les bits `0x44` et `0x43`
+sont ceux que l'arm de l'effet `0x2D` teste. L'origine est maintenant claire : **la position c8 l5
+porte `b0 = 0x0D` dans les DEUX couches**, et c8 l5 est la touche **Fn**.
+
+`0x0D` est donc le **maintien de couche**, et les bits `0x44`/`0x43` sont l'état « Fn est tenue ».
+L'effet `0x2D` ne réagit pas à un drapeau obscur : il réagit à ce que l'utilisateur tienne Fn.
+
+### Le relevé complet de la couche Fn d'usine
+
+| Touche | Fn + … |
+| --- | --- |
+| `Échap` | raccourci `0x04` — **réinitialisation d'usine**, appui long |
+| `` ` `` | raccourci `0x08` — **relance d'appairage** |
+| `1` `2` `3` | raccourcis `0x05` `0x06` `0x07` — emplacements Bluetooth |
+| `F1` | consumer — navigateur, accueil |
+| `F2` | consumer — courriel |
+| `F3` | classe 4, usage `0x2B` (Tab) |
+| `F4` | classe 8 — **restaure les couleurs par défaut** (`0x91D3`) |
+| `F5` `F6` | classe 3, paramètres 2 et 1 |
+| `F7` `F8` `F9` | consumer — piste précédente, lecture/pause, piste suivante |
+| `F10` | consumer — muet |
+| `F11` `F12` | consumer — volume − et + |
+| `Tab` | classe 2 |
+| `Q` `W` `E` | raccourcis `0x19` `0x18` `0x1A` |
+| `G` `B` | raccourcis `0x0A` `0x11` |
+| **`U`** | **Impr.écran** |
+| **`I`** | **Arrêt défil** |
+| **`O`** | **Pause** |
+| `\` | classe 0 via `b0 = 0x08` |
+| `Suppr` | Inser |
+| `Fin` | Origine |
+| `Haut` `Bas` | classe 3, paramètres 1 et 2 |
+| `Gauche` `Droite` | classe 4, paramètres 2 et 1 |
+
+### Ce que le portage en a repris
+
+**Trois touches ajoutées et flashées** : `Fn + U` → Impr.écran, `Fn + I` → Arrêt défil,
+`Fn + O` → Pause. Elles manquaient, et elles sont exactement celles de l'usine.
+
+**Ce qui manque encore**, et qui est de la fonctionnalité, pas de la transcription : la
+réinitialisation d'usine sur `Fn + Échap`, la relance d'appairage sur ``Fn + ` ``, la restauration
+des couleurs sur `Fn + F4`, et les raccourcis de `Q`, `W`, `E`, `G`, `B`, `Tab`, `\` dont la
+sémantique demanderait d'ouvrir les arms correspondants. La donnée est là ; la décision ne l'est pas.
+
+> **Note d'emplacement.** Le portage met la luminosité sur `Fn + [` / `]` et la vitesse sur
+> `Fn + ←` / `→`. L'usine met la luminosité sur `Fn + Haut` / `Bas` et la vitesse sur
+> `Fn + Gauche` / `Droite`. Ce sont deux choix, pas une erreur — mais si l'on veut l'ergonomie
+> d'origine, elle est maintenant relevée.
+
 > ## ✅ 2026-09-11 — premier flash réussi, bootloader préservé
 >
 > **Du code de ce dépôt a tourné sur l'appareil.** La carte `aula-f75-probe` — USB et retour ISP,
