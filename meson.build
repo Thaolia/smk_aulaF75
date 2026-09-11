@@ -27,6 +27,9 @@ parts = [
     # wireless 'euart0' : le BK3632 est relie par EUART0 (src/keyboards/aula-f75/aula_rf.c),
     # pas par le SPI bit-bange de l'Air60.
     ['aula-f75', 'sh68f90', ['default'], { 'vendor_id': '0x258a', 'product_id': '0x010c', 'wireless': 'euart0', 'led_rows': '6', 'led_cols': '15', 'led_cx2': '14', 'led_cy2': '5' }],
+    # AULA F75 -- carte SONDE de mise en route : USB et retour ISP, rien d'autre.
+    # Aucun GPIO n'est configure ni pilote. Voir src/keyboards/aula-f75-probe/kbdef.h.
+    ['aula-f75-probe', 'sh68f90', ['default'], { 'vendor_id': '0x258a', 'product_id': '0x010c', 'led_rows': '6', 'led_cols': '15', 'led_cx2': '14', 'led_cy2': '5' }],
 ]
 
 # SMK
