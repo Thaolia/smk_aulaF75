@@ -89,6 +89,9 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
         case RF_DIAG:
             if (key_pressed) indicators_toggle_rf_diag();
             return false;
+        case RF_PAIR:
+            if (key_pressed) rf_request_pairing();
+            return false;
 #endif
 
         case LNK_BT1:

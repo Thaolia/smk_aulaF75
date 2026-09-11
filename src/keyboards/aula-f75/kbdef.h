@@ -187,6 +187,17 @@ enum custom_keycodes {
     LNK_BT3,
 
     /*
+     * Relance d'appairage, sur `Fn + \``  -- la position du raccourci d'usine
+     * (clé 0x08 du répartiteur 0x4136, arm 0x426A).
+     *
+     * DIVERGENCE ASSUMÉE : l'arm d'usine exige le transport 2,4 GHz et ne
+     * réappaire donc que le dongle. Ici la commande part avec `rf_link_slot()`,
+     * qui rend le slot du transport COURANT : la même touche relance le dongle
+     * en 2,4 GHz et l'emplacement actif en Bluetooth. Sans effet en filaire.
+     */
+    RF_PAIR,
+
+    /*
      * Overlay de diagnostic radio sur les touches `1` à `0`. Le sans-fil échoue
      * clavier sur batterie, USB débranché : la console HID n'existe pas dans ce
      * montage, les LED oui.
