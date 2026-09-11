@@ -810,15 +810,48 @@ static __bit           macro_was_on;
  */
 #define HID_LED_CAPS_LOCK (1u << 1)
 
-/* Ligne 3, colonne 0 : la première entrée de la rangée 3 du `LAYOUT_75_ansi`,
- * qui porte `KC_CAPS` dans la couche de base. */
-#define CAPS_ROW 3
-#define CAPS_COL 0
+/*
+ * LE VOYANT EST UNE LED DÉDIÉE, ET CE N'EST PAS UNE LED : C'EST UN CANAL.
+ *
+ * Établi sur l'appareil, par balayage puis par sondage canal par canal. La
+ * position `[ligne 0][colonne 14]` -- électriquement l'appui molette, en haut à
+ * droite -- porte une position RGB complète dont les **trois canaux pilotent des
+ * voyants d'état distincts**, physiquement ailleurs sur la carte :
+ *
+ *   ROUGE -> voyant de Verr. Maj, à GAUCHE de la touche Verr. Maj
+ *   VERT  -> voyant entre Échap et F1
+ *   BLEU  -> le même voyant entre Échap et F1
+ *
+ * Les voyants d'état sont des LED à une seule couleur : l'usine se sert d'un
+ * emplacement libre comme de trois pilotes indépendants. Écrire du blanc ici
+ * allume les deux voyants à la fois -- c'est ce qui s'est passé au premier essai.
+ *
+ * Deux affirmations de nos sources tombent avec cette mesure :
+ *  - « l'appui d'encodeur n'a pas de LED » (layout.c, aula-f75.md) : la POSITION
+ *    en a une, et même trois canaux utiles ; c'est la TOUCHE qui n'a rien sous
+ *    son capuchon ;
+ *  - « ce clavier n'a aucun voyant dédié » : il en a au moins deux.
+ *
+ * C'est aussi l'explication du comptage d'OpenRGB, qui ne rattache que
+ * QUATRE-VINGTS des quatre-vingt-dix LED à une touche : les dix autres ne sont
+ * pas des trous, ce sont des LED réelles sans capuchon au-dessus.
+ *
+ * Conséquence : cette cellule doit être peinte explicitement, canal par canal.
+ * Sans ça les effets font clignoter les deux voyants au hasard -- ce qu'ils
+ * faisaient depuis le premier flash.
+ *
+ * Le voyant Échap/F1 (vert et bleu) reste ÉTEINT : rien n'est établi sur ce
+ * qu'il signifie en usine, et lui inventer un sens serait de la décoration.
+ */
+#define CAPS_ROW 0
+#define CAPS_COL 14
 
-/* Blanc franc mais pas aveuglant. Comme les autres overlays, il court-circuite
- * la luminosité utilisateur : un témoin invisible réglage à zéro ne sert à
- * rien, et c'est réglage à zéro qu'on oublie le plus facilement Verr. Maj. */
-#define CAPS_LEVEL 200
+/* Le canal est piloté à fond : le voyant est une LED unique derrière un diffuseur,
+ * pas un capuchon rétroéclairé, et sa couleur est celle du composant -- pas la
+ * nôtre. Comme les autres overlays, il court-circuite la luminosité utilisateur :
+ * un témoin invisible réglage à zéro ne sert à rien, et c'est réglage à zéro
+ * qu'on oublie le plus facilement Verr. Maj. */
+#define CAPS_LEVEL 255
 
 static __bit caps_on;
 
@@ -849,16 +882,19 @@ static void led_regen_one(void)
         goto advance;
     }
 
+    if (regen_row == CAPS_ROW && regen_col == CAPS_COL) {
+        /* Voyants d'état : jamais peints par les effets ni par le cœur de la
+         * frappe automatique. Rouge = Verr. Maj ; vert et bleu tenus à zéro pour
+         * garder éteint le voyant Échap/F1. */
+        aula_rgb_set(regen_row, regen_col, caps_on ? (uint8_t)CAPS_LEVEL : (uint8_t)0, 0, 0);
+        goto advance;
+    }
+
 #ifdef RF_EUART0
     if (rf_diag_on && rf_diag_paint()) {
         goto advance; /* cellule prise par le diagnostic */
     }
 #endif
-
-    if (caps_on && regen_row == CAPS_ROW && regen_col == CAPS_COL) {
-        aula_rgb_set(regen_row, regen_col, CAPS_LEVEL, CAPS_LEVEL, CAPS_LEVEL);
-        goto advance;
-    }
 
     if (aula_macro_active()) {
         /*

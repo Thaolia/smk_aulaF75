@@ -16,8 +16,13 @@
  *
  * Une seule différence, et elle compte : la capture donne **81** commutateurs,
  * pas 80. La position [ligne 0][colonne 14] est l'**appui d'encodeur** -- une
- * vraie position de matrice, invisible pour OpenRGB parce qu'elle n'a pas de
- * LED. C'est pourquoi num_leds vaut 90 pour 81 touches.
+ * vraie position de matrice, sans LED sous son capuchon.
+ *
+ * ⚠️ Cette position a bel et bien une LED, et même trois canaux utiles : ses
+ * canaux RGB pilotent les VOYANTS D'ÉTAT, câblés ailleurs sur la carte (rouge =
+ * Verr. Maj, vert et bleu = le voyant entre Échap et F1). Mesuré sur l'appareil.
+ * Voir `indicators.c`. C'est pourquoi OpenRGB ne rattache que 80 de ses 90 LED à
+ * une touche : les dix autres ne sont pas des trous.
  *
  * La ROTATION de l'encodeur est hors matrice : phases sur P0.5 et P0.6, lues
  * par le poller @ 0x7928 (mov a,P0 ; swap ; rrc ; anl #0x03), appelé depuis le

@@ -101,9 +101,45 @@ deux captures ont été perdues.
 panne : la fonction n'avait jamais été écrite pour cette carte.
 
 L'état vient du rapport LED HID de l'hôte, posé par `usb_ep0_out_irq()` (`src/smk/usb.c`) dans
-`keyboard_state.led_state` — bit 0 `Verr. Num`, **bit 1 `Verr. Maj`**, bit 2 `Arrêt défil`. Ce
-clavier n'a aucun voyant dédié : les quatre-vingt-dix LED sont une par touche, donc c'est la touche
-`Verr. Maj` elle-même qui s'allume, en blanc, sur `[ligne 3][colonne 0]`.
+`keyboard_state.led_state` — bit 0 `Verr. Num`, **bit 1 `Verr. Maj`**, bit 2 `Arrêt défil`.
+
+### Le voyant n'est pas une LED de touche, et ce n'est même pas une LED : c'est un CANAL
+
+Établi **sur l'appareil**, par balayage des positions puis sondage canal par canal — pas par
+inférence, et contre deux affirmations écrites de nos propres sources.
+
+La position `[ligne 0][colonne 14]` — électriquement l'appui molette, en haut à droite — porte une
+position RGB complète dont les **trois canaux pilotent des voyants d'état distincts, physiquement
+ailleurs sur la carte** :
+
+| Canal | Voyant |
+| --- | --- |
+| **rouge** | **`Verr. Maj`**, à gauche de la touche `Verr. Maj` |
+| vert | le voyant entre `Échap` et `F1` |
+| bleu | le même voyant entre `Échap` et `F1` |
+
+Les voyants d'état sont des LED à une seule couleur : l'usine se sert d'un emplacement libre comme de
+**trois pilotes indépendants**. Écrire du blanc à cette position allume les deux voyants d'un coup —
+c'est exactement ce qui s'est produit au premier essai, et c'est l'utilisateur qui l'a signalé.
+
+**Deux affirmations de cette page et de `layout.c` étaient fausses** :
+
+| Ce qui était écrit | La mesure |
+| --- | --- |
+| « l'appui d'encodeur n'a pas de LED » | la **position** en a une, avec trois canaux utiles ; c'est la **touche** qui n'a rien sous son capuchon |
+| « ce clavier n'a aucun voyant dédié » | il en a **au moins deux** |
+
+Et c'est l'explication du comptage d'OpenRGB : sa table `aula_f75_layout` ne rattache que
+**quatre-vingts** des quatre-vingt-dix LED à une touche. Les **dix** restantes — indices 6, 23, 29,
+41, 47, 65, 71, 75, 76, 84 — ne sont pas des trous de grille, ce sont des LED réelles sans capuchon
+au-dessus. Ce simple recomptage aurait suffi à trouver le voyant ; la recherche est passée par un
+scan du dump (non concluant : un scan d'octets sans alignement d'instruction confond `53 92 FD`, un
+`ANL`, avec un `MOV P7.5,C`) puis par un test de cinq broches libres, tous deux inutiles.
+
+Conséquence de rendu : cette cellule doit être peinte **explicitement, canal par canal**. Sans ça les
+effets font clignoter les deux voyants au hasard — ce qu'ils faisaient depuis le premier flash. Le
+voyant `Échap`/`F1` est tenu éteint : rien n'est établi sur ce qu'il signifie en usine, et lui
+inventer un sens serait de la décoration.
 
 ⚠️ **Filaire uniquement, et c'est structurel.** En 2,4 GHz et en Bluetooth, `rf_radio_on()` appelle
 `usb_hw_deinit()` : `usb_ep0_out_irq()` ne tourne plus, et **rien dans le protocole EUART0 décodé à
@@ -115,10 +151,9 @@ allumé indéfiniment sur l'état qu'avait l'hôte au moment du débranchement �
 affichée avec l'aplomb d'une information vraie, ce qui est pire que ne rien afficher. Au retour en
 filaire, l'hôte renvoie son état à l'énumération.
 
-**Ordre dans la chaîne de rendu** (`led_regen_one()`) : positions sans touche, diagnostic radio,
-**Verr. Maj**, cœur de la frappe automatique, effets. `Verr. Maj` passe avant le cœur parce que
-c'est un état que l'utilisateur doit connaître, et qu'une seule touche blanche dans un champ de
-rouge pulsé reste parfaitement lisible.
+**Ordre dans la chaîne de rendu** (`led_regen_one()`) : positions sans touche, **voyants d'état**,
+diagnostic radio, cœur de la frappe automatique, effets. Les voyants passent en tête parce qu'ils ne
+sont pas des touches : rien d'autre ne doit jamais écrire sur cette cellule.
 
 
 
