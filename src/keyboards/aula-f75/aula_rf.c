@@ -707,6 +707,85 @@ static void rf_status_apply(void)
     rf_battery_sample();
 }
 
+/*
+ * Vidange du tampon de reception, avec son verdict.
+ *
+ * Le module REPOND -- mesure sur l'appareil : le compteur d'octets recus grimpe
+ * sans interruption en 2,4 GHz comme en Bluetooth. Ce qui manque, c'est de
+ * savoir ce qu'il dit : sans les octets bruts on ne peut pas distinguer une
+ * trame valide mal analysee d'un debit mal regle qui produit du bruit.
+ */
+/*
+ * CAPTURE DIFFÉRÉE des premières trames reçues.
+ *
+ * Imprimer au fil de l'eau ne marche pas : la console vit sur l'USB, et le
+ * mode sans-fil est justement celui où l'USB n'est pas disponible -- sur
+ * batterie il n'y a pas de câble, et même branché le firmware normal coupe le
+ * périphérique. Deux captures ont été perdues à cause de ça.
+ *
+ * On mémorise donc les TROIS PREMIÈRES trames, sans jamais les écraser, et on
+ * les rejoue dès que la console redevient disponible -- typiquement au retour
+ * en position filaire. Le timing ne compte plus.
+ */
+#if DEBUG == 1
+
+#    define RF_CAP_FRAMES 3
+#    define RF_CAP_LEN    12
+
+static __xdata uint8_t cap_buf[RF_CAP_FRAMES][RF_CAP_LEN];
+static __xdata uint8_t cap_len[RF_CAP_FRAMES];
+static __xdata uint8_t cap_why[RF_CAP_FRAMES];
+static __xdata uint8_t cap_n;
+static __xdata uint8_t cap_shown;
+
+static void rf_rx_dump(uint8_t verdict)
+{
+    uint8_t i;
+    uint8_t len;
+
+    if (cap_n >= RF_CAP_FRAMES) {
+        return;
+    }
+    len = (rx_idx < RF_CAP_LEN) ? rx_idx : RF_CAP_LEN;
+    for (i = 0; i < len; i++) {
+        cap_buf[cap_n][i] = rx_buf[i];
+    }
+    cap_len[cap_n] = rx_idx;
+    cap_why[cap_n] = verdict;
+    cap_n++;
+}
+
+/* Rejoue une trame par passage, quand la console a la place. */
+static void rf_cap_replay(void)
+{
+    uint8_t i;
+    uint8_t len;
+
+    if (cap_shown >= cap_n || !console_is_drained()) {
+        return;
+    }
+    len = (cap_len[cap_shown] < RF_CAP_LEN) ? cap_len[cap_shown] : RF_CAP_LEN;
+    dprintf("rx[%u] why=%u n=%u:", (unsigned)cap_shown, (unsigned)cap_why[cap_shown],
+            (unsigned)cap_len[cap_shown]);
+    for (i = 0; i < len; i++) {
+        dprintf(" %02x", (unsigned)cap_buf[cap_shown][i]);
+    }
+    dprintf("\r\n");
+    cap_shown++;
+}
+
+#else
+#    define rf_rx_dump(verdict) ((void)0)
+#    define rf_cap_replay()     ((void)0)
+#endif
+
+/* why= : 0 type inconnu, 1 somme/gardes 0x02 KO, 2 statut OK, 3 annonce, 4 conteneur */
+#define RF_WHY_TYPE  0
+#define RF_WHY_BAD02 1
+#define RF_WHY_OK02  2
+#define RF_WHY_ANN   3
+#define RF_WHY_BULK  4
+
 static void rf_rx_consume(void)
 {
     if (!rx_pending) {
@@ -727,6 +806,9 @@ static void rf_rx_consume(void)
                 rf_rx_checksum_ok(RF_RX_LEN_STATUS - 1)) {
                 probe_answered = 1;
                 rf_status_apply();
+                rf_rx_dump(RF_WHY_OK02);
+            } else {
+                rf_rx_dump(RF_WHY_BAD02);
             }
             break;
 
@@ -736,6 +818,7 @@ static void rf_rx_consume(void)
             }
             (void)rf_rx_checksum_ok(RF_RX_LEN_BULK - 1);
             /* Conteneur à sous-commandes : rien n'en dépend dans ce portage. */
+            rf_rx_dump(RF_WHY_BULK);
             break;
 
         case RF_RX_TYPE_ANNOUNCE:
@@ -745,10 +828,12 @@ static void rf_rx_consume(void)
              * prouve que le module parle.
              */
             probe_answered = 1;
+            rf_rx_dump(RF_WHY_ANN);
             break;
 
         default:
             /* Type inconnu : on jette plutôt que de tenter un recalage. */
+            rf_rx_dump(RF_WHY_TYPE);
             break;
     }
 
@@ -1091,7 +1176,11 @@ static void rf_diag_trace(void)
     for (i = 0; i < RF_DIAG_FIELDS; i++) {
         /* La file de rapports bouge à chaque frappe : la surveiller noierait
          * la console sans rien apprendre sur la liaison. */
-        if (i != RF_DIAG_QCOUNT && diag_prev[i] != rf_diag_state[i]) {
+        /* Les compteurs de réception ont fait leur office -- ils ont prouvé que
+         * le module parle. Les surveiller maintenant noierait la console et
+         * empêcherait le rejeu des trames capturées, qui est ce qui compte. */
+        if (i != RF_DIAG_QCOUNT && i != RF_DIAG_RXTOT && i != RF_DIAG_RXLAST &&
+            i != RF_DIAG_RXIDX && diag_prev[i] != rf_diag_state[i]) {
             changed = true;
             break;
         }
@@ -1198,6 +1287,7 @@ void rf_task(void)
     rf_diag_state[RF_DIAG_RXIDX]  = rx_idx;
 
     rf_diag_trace();
+    rf_cap_replay();
 }
 
 rf_link_t rf_link(void)
