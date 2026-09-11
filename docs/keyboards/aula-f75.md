@@ -1,5 +1,97 @@
 # Epomaker × AULA F75 (modèle classique)
 
+> ## ✅ 2026-09-11 — LE SANS-FIL FONCTIONNE, et la cause racine n'était pas dans le protocole
+>
+> **Frappe confirmée sur le dongle 2,4 GHz**, après la première mise en service de la radio sur
+> l'appareil. Ce qui bloquait n'était ni le brochage, ni le débit, ni la trame : **l'EUART0 perdait
+> huit octets à chaque balayage de matrice.**
+
+## La mise en service du sans-fil — ce que l'appareil a dit
+
+Symptôme de départ : 2,4 GHz **et** Bluetooth échouent identiquement, rétroéclairage intact,
+frappes perdues. Les deux transports tombant ensemble, la faute était dans le chemin commun.
+
+### La cause racine : une priorité d'interruption
+
+`tick.c` exécute le **balayage complet de la matrice** et les sous-trames LED **dans l'ISR Timer2**.
+Un balayage dure ~320 µs. À 260 870 bauds un octet tombe toutes les **38 µs**, et le SH68F90 n'a
+aucun tampon derrière `SBUF`. À priorité égale l'ISR série ne préempte pas : **chaque balayage de
+matrice coûte huit octets.**
+
+La preuve est dans le flux brut, latché dans l'ISR sans aucune interprétation :
+
+```
+02 00 00 52 │ 03 00 52 │ 02 06 00 00 00 02 dd 03 │ 02 00 01 00 │ 02 00 01 00 00 52
+03 00 00 00 00 52 │ 02 00 01 00 │ 02 00 52 │ 02 00 01 │ 02 00
+```
+
+`02 00 01 00 00 52` et `03 00 00 00 00 52` ont des sommes **valides** (`0x55 − Σ`). Tout le reste
+— `02 00 00 52`, `02 00 52`, `02 00 01 00` — n'en est que des **sous-suites**. Le module émettait
+correctement ; nous perdions des octets.
+
+**Le firmware d'usine pose exactement le bit qui manquait, et cette page le notait déjà** sans
+qu'on en tire la conséquence : `0xECC5` écrit `IPH1 = 0x42` et `IPL1 = 0x41`, bit 6 des deux côtés,
+soit l'EUART0 au **niveau 3**. SMK ne réglait aucune priorité d'interruption.
+
+```c
+IPH1 |= _ES0;
+IPL1 |= _ES0;
+```
+
+Après correction, le même flux : **zéro trame rejetée, zéro perte de lien.**
+
+### Le format des trames reçues — relevé, plus inféré
+
+La longueur dépend de **l'octet 1**, qui rappelle la commande acquittée, et non du seul type.
+
+| Trame | Longueur | Sens |
+| --- | --- | --- |
+| `02 06 00 00 00 02 dd 03 01 6a` | **10** | réponse à la sonde d'état `0x06` |
+| `02 01 00 00 00 52` | **6** | accusé du link-select |
+| `02 02 00 00 00 51` | **6** | accusé d'un rapport de touches |
+| `03 00 00 00 00 52` | **6** | annonce |
+
+Somme d'usine `0x55 − Σ` vérifiée sur chacune. Sur la réponse d'état, `[4] = 0` et `[5] = 2` — ce
+qui satisfait exactement la condition 2,4 GHz de `rf_status_apply()` — et `[6:7] = dd 03` donne une
+batterie de **989**, au-dessus du seuil « pleine » de 912.
+
+Le portage attendait **dix** octets pour toute trame de type `0x02` : sur un accusé de six il
+avalait le début de la trame suivante et ne se recalait jamais.
+
+### Trois défauts de structure, mis en évidence par la même mesure
+
+1. **Le link-select était prisonnier des noms Bluetooth.** La commande `0x01` est la seule qui
+   commute le module, et elle était derrière deux envois de 32 octets dans une chaîne `if / else if`.
+   Un seul échec figeait `name_stage`. L'usine émet ses noms depuis `main`, **sans garde**.
+2. **`link_tx_pending` retombait avant l'émission**, dont le retour était jeté : une commande refusée
+   était perdue définitivement.
+3. **`rf_rx_drop()` jetait le tampon entier** après chaque trame. À 260 kbauds contre une boucle
+   principale en millisecondes, deux trames atterrissent couramment ensemble : la seconde était
+   perdue. Et sur un octet parasite, tout jeter interdisait tout recalage.
+
+`P4.7` a par ailleurs été mesuré **haut** : la ligne « module prêt » n'a jamais rien bloqué. Le garde
+reste sur les rapports, mais le contrôle s'en affranchit après `RF_CTRL_STALL` tentatives — sans ce
+repli, une ligne basse rendrait le défaut indiagnosticable.
+
+### L'outillage qui a permis tout ça
+
+**La console HID de SMK** (`src/smk/console.c`, page vendeur `0xFF31`, usage `0x74`, report ID 7) :
+elle existait, elle n'avait jamais servi sur ce clavier. Lecteur PC dans `tools/smk_console.py`.
+
+⚠️ **Un défaut de SMK amont la rendait inutilisable sous Windows.** La collection console ne
+déclarait que son `INPUT`, alors que l'attachement de l'hôte passe par `SET_REPORT(FEATURE, id 7)`.
+Linux transmet n'importe quel `SET_REPORT` via hidraw et le défaut y reste invisible ; **Windows
+valide contre le descripteur et refuse** — mesuré : `-1` à chaque longueur, sur les deux collections
+vendeur. Un item `FEATURE` ajouté dans `src/smk/usb.c`, et la console débite.
+
+**L'overlay LED `Fn + R`** peint l'état du pilote sur les touches `1` à `0`. C'est le seul
+instrument utilisable sur batterie, USB débranché — c'est-à-dire dans le montage qui échouait.
+
+**La capture différée** : le firmware mémorise les 64 premiers octets reçus et les rejoue quand la
+console redevient disponible. Sans elle, le minutage de la manip devenait la variable dominante et
+deux captures ont été perdues.
+
+
 
 
 ## `AULA_FX_LAKE` — l'onde qui part de la touche frappée
