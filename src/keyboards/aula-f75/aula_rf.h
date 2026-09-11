@@ -107,7 +107,16 @@ void rf_sleep_wake(void);
 #define RF_DIAG_CONN   7 /* le module a répondu à une sonde récente */
 #define RF_DIAG_QCOUNT 8 /* rapports en file, 0 à 6 -- sature si rien ne part */
 #define RF_DIAG_MISSES 9 /* sondes d'état sans réponse */
-#define RF_DIAG_FIELDS 10
+/*
+ * Réception. Ces trois-là partagent « le module a-t-il seulement ouvert la
+ * bouche ? » en deux questions distinctes : si RXTOT reste à zéro, rien
+ * n'arrive sur le fil et le défaut est en amont de tout décodage ; s'il monte,
+ * le module parle et c'est notre analyse de trame qui le rejette.
+ */
+#define RF_DIAG_RXTOT  10 /* octets reçus depuis le démarrage, modulo 256 */
+#define RF_DIAG_RXLAST 11 /* dernier octet reçu -- ce que le module dit */
+#define RF_DIAG_RXIDX  12 /* remplissage courant du tampon de réception */
+#define RF_DIAG_FIELDS 13
 
 extern __xdata uint8_t rf_diag_state[RF_DIAG_FIELDS];
 

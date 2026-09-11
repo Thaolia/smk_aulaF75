@@ -138,6 +138,9 @@ static volatile __data uint8_t  tx_idx;
 static volatile __bit           tx_busy;
 
 static __xdata uint8_t         rx_buf[RF_RX_MAX];
+/* Compteurs bruts, en XDATA : la RAM interne n'a que dix-neuf octets de marge. */
+static volatile __xdata uint8_t rx_total;
+static volatile __xdata uint8_t rx_last;
 static volatile __data uint8_t rx_idx;
 static volatile __bit          rx_pending;
 
@@ -323,6 +326,8 @@ void rf_euart0_interrupt_handler(void) __interrupt(_INT_EUART0)
          * `rf_rx_consume()`, seul endroit qui connaisse le format des types.
          */
         const uint8_t byte = SBUF;
+        rx_total++;
+        rx_last = byte;
         if (rx_idx < RF_RX_MAX) {
             rx_buf[rx_idx++] = byte;
         }
@@ -770,6 +775,8 @@ static void rf_uart_init(void)
     tx_len   = 0;
     rx_idx     = 0;
     rx_pending = 0;
+    rx_total   = 0;
+    rx_last    = 0;
 
     /* Handshake au repos : P0.2 en entrée, relâché. */
     P0CR &= (uint8_t)~0x04;
@@ -887,7 +894,10 @@ static void rf_enter_wired(void)
     link_connected  = 0;
     link_tx_pending = 0;
     rf_radio_off();
-    usb_init();
+#ifndef RF_DEBUG_KEEP_USB
+    usb_init(); /* sous KEEP_USB l'USB n'a jamais été coupé : le relancer
+                 * couperait la console au pire moment. */
+#endif
     /*
      * 200 ms bloquants, comme le firmware d'usine. `delay_us` donne un coup de
      * chien de garde à chaque microseconde, donc le WDT ne mord pas — mais le
@@ -1071,15 +1081,17 @@ static void rf_restore_settings(void)
  * Compile à zéro hors build debug (`debug.h`).
  */
 #if DEBUG == 1
-static __xdata uint8_t diag_prev[RF_DIAG_CONN + 1];
+static __xdata uint8_t diag_prev[RF_DIAG_FIELDS];
 
 static void rf_diag_trace(void)
 {
     uint8_t i;
     bool    changed = false;
 
-    for (i = 0; i <= RF_DIAG_CONN; i++) {
-        if (diag_prev[i] != rf_diag_state[i]) {
+    for (i = 0; i < RF_DIAG_FIELDS; i++) {
+        /* La file de rapports bouge à chaque frappe : la surveiller noierait
+         * la console sans rien apprendre sur la liaison. */
+        if (i != RF_DIAG_QCOUNT && diag_prev[i] != rf_diag_state[i]) {
             changed = true;
             break;
         }
@@ -1100,15 +1112,18 @@ static void rf_diag_trace(void)
     if (!console_is_drained()) {
         return;
     }
-    for (i = 0; i <= RF_DIAG_CONN; i++) {
+    for (i = 0; i < RF_DIAG_FIELDS; i++) {
         diag_prev[i] = rf_diag_state[i];
     }
-    dprintf("rf 74=%u 45=%u 47=%u link=%u pend=%u name=%u txb=%u conn=%u q=%u miss=%u\r\n",
+    dprintf("rf 74=%u 45=%u 47=%u link=%u pend=%u name=%u txb=%u conn=%u q=%u miss=%u "
+            "rx=%u last=%02x idx=%u\r\n",
             (unsigned)rf_diag_state[RF_DIAG_P74], (unsigned)rf_diag_state[RF_DIAG_P45],
             (unsigned)rf_diag_state[RF_DIAG_P47], (unsigned)rf_diag_state[RF_DIAG_LINK],
             (unsigned)rf_diag_state[RF_DIAG_TXPEND], (unsigned)rf_diag_state[RF_DIAG_NAME],
             (unsigned)rf_diag_state[RF_DIAG_TXBUSY], (unsigned)rf_diag_state[RF_DIAG_CONN],
-            (unsigned)rf_diag_state[RF_DIAG_QCOUNT], (unsigned)rf_diag_state[RF_DIAG_MISSES]);
+            (unsigned)rf_diag_state[RF_DIAG_QCOUNT], (unsigned)rf_diag_state[RF_DIAG_MISSES],
+            (unsigned)rf_diag_state[RF_DIAG_RXTOT], (unsigned)rf_diag_state[RF_DIAG_RXLAST],
+            (unsigned)rf_diag_state[RF_DIAG_RXIDX]);
 }
 #else
 #    define rf_diag_trace() ((void)0)
@@ -1178,6 +1193,9 @@ void rf_task(void)
     rf_diag_state[RF_DIAG_CONN]   = link_connected ? 1 : 0;
     rf_diag_state[RF_DIAG_QCOUNT] = q_count;
     rf_diag_state[RF_DIAG_MISSES] = probe_misses;
+    rf_diag_state[RF_DIAG_RXTOT]  = rx_total;
+    rf_diag_state[RF_DIAG_RXLAST] = rx_last;
+    rf_diag_state[RF_DIAG_RXIDX]  = rx_idx;
 
     rf_diag_trace();
 }
