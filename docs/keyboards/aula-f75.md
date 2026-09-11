@@ -94,6 +94,35 @@ deux captures ont été perdues.
 
 
 
+## Verrouillage majuscule — le témoin qui n'existait pas
+
+`indicators_update_step()` recevait `keyboard_state_t *keyboard` et l'écartait d'un
+`(void)keyboard; /* les indicateurs d'état ne sont pas encore portés */`. Ce n'était donc pas une
+panne : la fonction n'avait jamais été écrite pour cette carte.
+
+L'état vient du rapport LED HID de l'hôte, posé par `usb_ep0_out_irq()` (`src/smk/usb.c`) dans
+`keyboard_state.led_state` — bit 0 `Verr. Num`, **bit 1 `Verr. Maj`**, bit 2 `Arrêt défil`. Ce
+clavier n'a aucun voyant dédié : les quatre-vingt-dix LED sont une par touche, donc c'est la touche
+`Verr. Maj` elle-même qui s'allume, en blanc, sur `[ligne 3][colonne 0]`.
+
+⚠️ **Filaire uniquement, et c'est structurel.** En 2,4 GHz et en Bluetooth, `rf_radio_on()` appelle
+`usb_hw_deinit()` : `usb_ep0_out_irq()` ne tourne plus, et **rien dans le protocole EUART0 décodé à
+ce jour ne remonte l'état LED de l'hôte**. Les trames entrantes connues sont l'état (10 o), l'acquit
+(6 o) et le bloc (22 o) ; laquelle porterait cette information, et à quel offset, n'est pas établi.
+
+`rf_radio_on()` remet donc `led_state` à zéro avant de démonter l'USB. Sans ça, le témoin resterait
+allumé indéfiniment sur l'état qu'avait l'hôte au moment du débranchement — une information périmée
+affichée avec l'aplomb d'une information vraie, ce qui est pire que ne rien afficher. Au retour en
+filaire, l'hôte renvoie son état à l'énumération.
+
+**Ordre dans la chaîne de rendu** (`led_regen_one()`) : positions sans touche, diagnostic radio,
+**Verr. Maj**, cœur de la frappe automatique, effets. `Verr. Maj` passe avant le cœur parce que
+c'est un état que l'utilisateur doit connaître, et qu'une seule touche blanche dans un champ de
+rouge pulsé reste parfaitement lisible.
+
+
+
+
 ## Frappe automatique — création, et les deux pièges qu'elle a révélés
 
 ⚠️ **Aucun équivalent d'usine.** `Fn + Espace` ou `Fn + appui molette` lance un mode qui tape une

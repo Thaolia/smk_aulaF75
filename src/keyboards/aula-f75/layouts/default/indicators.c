@@ -796,6 +796,32 @@ static const __code uint8_t macro_heart[MACRO_HEART_STEPS] = {
 static __xdata uint8_t macro_beat;
 static __bit           macro_was_on;
 
+/* ------------------------------------------------------------ Verr. Maj
+ *
+ * Le rapport LED HID de l'hôte arrive par `usb_ep0_out_irq()` et atterrit dans
+ * `keyboard_state.led_state` : bit 0 Verr. Num, **bit 1 Verr. Maj**, bit 2
+ * Arrêt défil. Ce clavier n'a pas de voyant dédié -- c'est la touche elle-même
+ * qui s'allume, en blanc, sur sa position de grille.
+ *
+ * ⚠️ FILAIRE UNIQUEMENT. En 2,4 GHz et en Bluetooth l'USB est démonté, et rien
+ * dans le protocole EUART0 décodé à ce jour ne remonte l'état LED de l'hôte.
+ * `rf_radio_on()` remet donc `led_state` à zéro : mieux vaut ne rien afficher
+ * qu'afficher une information périmée.
+ */
+#define HID_LED_CAPS_LOCK (1u << 1)
+
+/* Ligne 3, colonne 0 : la première entrée de la rangée 3 du `LAYOUT_75_ansi`,
+ * qui porte `KC_CAPS` dans la couche de base. */
+#define CAPS_ROW 3
+#define CAPS_COL 0
+
+/* Blanc franc mais pas aveuglant. Comme les autres overlays, il court-circuite
+ * la luminosité utilisateur : un témoin invisible réglage à zéro ne sert à
+ * rien, et c'est réglage à zéro qu'on oublie le plus facilement Verr. Maj. */
+#define CAPS_LEVEL 200
+
+static __bit caps_on;
+
 static void led_regen_one(void)
 {
     const uint8_t gain = led_brightness_gain[user_settings.led_brightness];
@@ -828,6 +854,11 @@ static void led_regen_one(void)
         goto advance; /* cellule prise par le diagnostic */
     }
 #endif
+
+    if (caps_on && regen_row == CAPS_ROW && regen_col == CAPS_COL) {
+        aula_rgb_set(regen_row, regen_col, CAPS_LEVEL, CAPS_LEVEL, CAPS_LEVEL);
+        goto advance;
+    }
 
     if (aula_macro_active()) {
         /*
@@ -1080,8 +1111,9 @@ static void led_react_poll(void)
 
 bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 {
-    (void)keyboard;      /* les indicateurs d'état ne sont pas encore portés */
     (void)current_step;  /* `tick.c` passe toujours 0 */
+
+    caps_on = (keyboard->led_state & HID_LED_CAPS_LOCK) ? 1 : 0;
 
     /* La sous-trame LED est la seule base de temps régulière du firmware --
      * ~400 µs -- et c'est à cette cadence que l'usine échantillonne aussi sa
@@ -1104,9 +1136,9 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
     }
 
 #ifdef RF_EUART0
-    if (aula_macro_active() || rf_diag_on || user_settings.led_effect < AULA_FX_OFF) {
+    if (aula_macro_active() || caps_on || rf_diag_on || user_settings.led_effect < AULA_FX_OFF) {
 #else
-    if (aula_macro_active() || user_settings.led_effect < AULA_FX_OFF) {
+    if (aula_macro_active() || caps_on || user_settings.led_effect < AULA_FX_OFF) {
 #endif
         led_regen_one();
 

@@ -1006,6 +1006,15 @@ static void rf_tx_drain(void)
  */
 static void rf_radio_on(void)
 {
+    /*
+     * L'état des LED hôte (Verr. Maj, Verr. Num, Arrêt défil) n'arrive QUE par
+     * `usb_ep0_out_irq()`. L'USB va être démonté juste en dessous : à partir de
+     * cet instant on ne sait plus rien de ce que fait l'hôte, et laisser le
+     * témoin allumé sur une information périmée serait pire que ne rien
+     * afficher. Au retour en filaire, l'hôte renvoie son état à l'énumération.
+     */
+    keyboard_set_led_state(0);
+
     IEN1 |= _ES0;
 #ifndef RF_DEBUG_KEEP_USB
     usb_hw_deinit();
