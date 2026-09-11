@@ -8,7 +8,8 @@
  * SH68F90A, avec sa propre trame et son propre jeu de commandes.
  *
  * Tout ce qui suit vient du désassemblage du firmware d'usine
- * (`docs/keyboards/aula-f75.md`). Rien n'a été flashé ni mesuré sur l'appareil.
+ * (`docs/keyboards/aula-f75.md`). Le code a été flashé et tourne, mais la
+ * liaison elle-même n'a jamais été établie : voir l'overlay de diagnostic.
  */
 
 #include <stdint.h>
@@ -83,6 +84,32 @@ void rf_request_pairing(void);
  */
 void rf_sleep_prepare(void);
 void rf_sleep_wake(void);
+
+/*
+ * ---------------------------------------------------------------- DIAGNOSTIC
+ *
+ * Instantané d'état, rempli à chaque passage de `rf_task()` et lu par l'overlay
+ * de `indicators.c` (touche `Fn + R`). C'est le SEUL instrument utilisable dans
+ * le montage qui échoue -- batterie, USB débranché -- où la console HID n'existe
+ * pas.
+ *
+ * Un tableau et non un accesseur : l'overlay est peint depuis l'ISR Timer2, et
+ * un appel vers `aula_rf.c` depuis l'ISR ferait partager au module le
+ * recouvrement statique SDCC de la boucle principale.
+ */
+#define RF_DIAG_P74    0 /* sélecteur, broche 1 */
+#define RF_DIAG_P45    1 /* sélecteur, broche 2 */
+#define RF_DIAG_P47    2 /* « module prêt » */
+#define RF_DIAG_LINK   3 /* rf_link_t courant */
+#define RF_DIAG_TXPEND 4 /* link-select encore en attente d'émission */
+#define RF_DIAG_NAME   5 /* nombre de noms Bluetooth émis, 0 à 2 */
+#define RF_DIAG_TXBUSY 6 /* rafale série en vol */
+#define RF_DIAG_CONN   7 /* le module a répondu à une sonde récente */
+#define RF_DIAG_QCOUNT 8 /* rapports en file, 0 à 6 -- sature si rien ne part */
+#define RF_DIAG_MISSES 9 /* sondes d'état sans réponse */
+#define RF_DIAG_FIELDS 10
+
+extern __xdata uint8_t rf_diag_state[RF_DIAG_FIELDS];
 
 void rf_send_report(__xdata report_keyboard_t *report);
 void rf_send_nkro(__xdata report_nkro_t *report);

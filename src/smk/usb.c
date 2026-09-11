@@ -140,6 +140,22 @@ const uint8_t hid_report_desc_extra[] = {
         HID_RI_REPORT_SIZE(8, 0x08),
         HID_RI_REPORT_COUNT(8, CONSOLE_REPORT_SIZE),
         HID_RI_INPUT(8, HID_IOF_DATA | HID_IOF_VARIABLE | HID_IOF_ABSOLUTE),
+        /*
+         * Le rapport FEATURE par lequel l'hôte s'annonce.
+         *
+         * `usb_ep0_setup` accepte SET_REPORT(FEATURE, REPORT_ID_CONSOLE) pour
+         * appeler `console_notify_attached()`, mais la collection ne déclarait
+         * que son INPUT. Sous Linux le passage par hidraw transmet n'importe
+         * quel SET_REPORT et le défaut reste invisible ; **Windows valide la
+         * requête contre le descripteur** et la refuse : `HidD_SetFeature` rend
+         * FALSE, la console ne se vide jamais, et le clavier paraît muet.
+         *
+         * Mesuré sur un AULA F75 : -1 à chaque longueur essayée, sur les deux
+         * collections vendeur, jusqu'à l'ajout de cet item.
+         */
+        HID_RI_USAGE(8, 0x76),            // Console attach
+        HID_RI_REPORT_COUNT(8, 0x01),
+        HID_RI_FEATURE(8, HID_IOF_DATA | HID_IOF_VARIABLE | HID_IOF_ABSOLUTE),
     HID_RI_END_COLLECTION(0),
 #endif // DEBUG
 

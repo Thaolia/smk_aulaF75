@@ -8,6 +8,9 @@
 #include "user_matrix.h"
 #include "aula_rgb.h"
 #include "aula_fx.h"
+#ifdef RF_EUART0
+#    include "aula_rf.h"
+#endif
 
 /*
  * Rétroéclairage de l'AULA F75.
@@ -699,6 +702,62 @@ static void fx_color(uint8_t wheel_index, uint8_t out[3])
     }
 }
 
+/* -------------------------------------------------- overlay de diagnostic radio
+ *
+ * La liaison sans-fil échoue dans un montage où l'USB est DÉBRANCHÉ -- clavier
+ * sur batterie, dongle sur le PC. La console HID de SMK n'y existe pas. Les
+ * quatre-vingt-dix LED, elles, fonctionnent : elles sont le seul instrument
+ * disponible là où le défaut se produit.
+ *
+ * `Fn + R` peint l'état du pilote sur les touches `1` à `0` (ligne 1, colonnes
+ * 1 à 10). L'overlay court-circuite la luminosité utilisateur : il doit rester
+ * lisible même réglage à zéro, et même effet éteint.
+ */
+#ifdef RF_EUART0
+
+static __bit rf_diag_on;
+
+void indicators_toggle_rf_diag(void)
+{
+    rf_diag_on = !rf_diag_on;
+}
+
+/* Rend false si la cellule courante ne fait pas partie de l'overlay. */
+static bool rf_diag_paint(void)
+{
+    uint8_t field;
+    uint8_t v;
+
+    if (regen_row != 1 || regen_col < 1 || regen_col > RF_DIAG_FIELDS) {
+        return false;
+    }
+    field = (uint8_t)(regen_col - 1);
+    v     = rf_diag_state[field];
+
+    switch (field) {
+        case RF_DIAG_LINK:
+            /* éteint = filaire, bleu = 2,4 GHz, cyan = Bluetooth */
+            aula_rgb_set(regen_row, regen_col, 0, (v == 2) ? 255 : 0, v ? 255 : 0);
+            break;
+        case RF_DIAG_NAME:
+            /* 0 éteint, 1 jaune, 2 vert */
+            aula_rgb_set(regen_row, regen_col, (v == 1) ? 255 : 0, v ? 255 : 0, 0);
+            break;
+        case RF_DIAG_QCOUNT:
+        case RF_DIAG_MISSES:
+            /* compteur : rouge d'autant plus vif qu'il monte */
+            aula_rgb_set(regen_row, regen_col, v ? (uint8_t)(40 + v * 35) : 0, 0, 0);
+            break;
+        default:
+            /* booléen : vert = 1, rouge = 0 */
+            aula_rgb_set(regen_row, regen_col, v ? 0 : 255, v ? 255 : 0, 0);
+            break;
+    }
+    return true;
+}
+
+#endif /* RF_EUART0 */
+
 static void led_regen_one(void)
 {
     const uint8_t gain = led_brightness_gain[user_settings.led_brightness];
@@ -718,7 +777,22 @@ static void led_regen_one(void)
      * continus -- vague, arc-en-ciel vertical, uni, géométrie de SMK -- ne le
      * faisaient pas et payaient une recherche de couleur pour rien.
      */
-    if (aula_fx_key_id(regen_col, regen_row) == AULA_FX_NO_KEY) {
+#ifdef RF_EUART0
+    if (rf_diag_on && rf_diag_paint()) {
+        goto advance; /* cellule prise par le diagnostic */
+    }
+#endif
+
+    if (aula_fx_key_id(regen_col, regen_row) == AULA_FX_NO_KEY ||
+        user_settings.led_effect >= AULA_FX_OFF) {
+        /*
+         * Pas de touche ici, ou effet éteint. Le second cas n'arrivait pas avant
+         * l'overlay : `indicators_update_step()` sautait tout le rendu quand
+         * l'effet valait AULA_FX_OFF. Il l'appelle maintenant pour peindre le
+         * diagnostic, donc ce chemin doit rendre du noir plutôt que de tomber
+         * dans la branche géométrique -- qui passerait l'indice 15 à
+         * `led_effect_index()`, dont l'énumération s'arrête à 3.
+         */
         aula_rgb_set(regen_row, regen_col, 0, 0, 0);
     } else if (user_settings.led_effect >= AULA_FX_REACTIVE &&
         user_settings.led_effect <= AULA_FX_LAKE) {
@@ -891,6 +965,9 @@ static void led_regen_one(void)
                      led_scale(rgb[2], gain));
     }
 
+#ifdef RF_EUART0
+advance:
+#endif
     if (++regen_col >= LED_COLS) {
         regen_col = 0;
         if (++regen_row >= LED_ROWS) {
@@ -951,7 +1028,11 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
         led_react_poll();
     }
 
+#ifdef RF_EUART0
+    if (rf_diag_on || user_settings.led_effect < AULA_FX_OFF) {
+#else
     if (user_settings.led_effect < AULA_FX_OFF) {
+#endif
         led_regen_one();
 
         /* Charger les dix-huit rapports cycliques PENDANT que les bancs sont

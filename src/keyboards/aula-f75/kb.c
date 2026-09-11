@@ -42,6 +42,9 @@ extern void indicators_brightness_up(void);
 extern void indicators_brightness_down(void);
 extern void indicators_speed_up(void);
 extern void indicators_speed_down(void);
+#ifdef RF_EUART0
+extern void indicators_toggle_rf_diag(void);
+#endif
 
 /*
  * Les keycodes LNK_BT1..3 ne choisissent que l'emplacement Bluetooth : le
@@ -82,6 +85,11 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
         case DIR_TOG:
             if (key_pressed) indicators_toggle_direction();
             return false;
+#ifdef RF_EUART0
+        case RF_DIAG:
+            if (key_pressed) indicators_toggle_rf_diag();
+            return false;
+#endif
 
         case LNK_BT1:
             slot = 1;

@@ -320,6 +320,12 @@ foreach part : parts
                 error('@0@: wireless "euart0" owns EUART0; debug_sink must stay "console"'.format(keyboard))
             endif
             cc_args += '-DRF_EUART0=1'
+            if get_option('rf_debug_keep_usb')
+                if get_option('buildtype') != 'debug'
+                    error('@0@: rf_debug_keep_usb needs a debug build - it exists only to keep the HID console alive'.format(keyboard))
+                endif
+                cc_args += '-DRF_DEBUG_KEEP_USB=1'
+            endif
         elif wireless != ''
             error('unsupported platform: @0@'.format(platform))
         endif

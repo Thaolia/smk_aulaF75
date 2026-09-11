@@ -160,8 +160,9 @@ uint8_t user_matrix_pressed(uint8_t col);
  *   P7.4 = 1, P4.5 = 0  -> Bluetooth, slot choisi par LNK_BT1..3
  * P4.7 est la ligne « module prêt » : aucune trame ne part quand elle est basse.
  *
- * AVERTISSEMENT : ce pilote est transcrit du désassemblage et n'a JAMAIS été
- * exécuté -- rien n'a été flashé sur l'appareil.
+ * ÉTAT : ce pilote est transcrit du désassemblage. Il a été flashé et tourne,
+ * mais aucune liaison n'a encore été établie -- ni 2,4 GHz, ni Bluetooth. Le
+ * keycode RF_DIAG ci-dessous est l'instrument qui doit dire pourquoi.
  * ------------------------------------------------------------------------- */
 
 enum custom_keycodes {
@@ -184,6 +185,13 @@ enum custom_keycodes {
     LNK_BT1,
     LNK_BT2,
     LNK_BT3,
+
+    /*
+     * Overlay de diagnostic radio sur les touches `1` à `0`. Le sans-fil échoue
+     * clavier sur batterie, USB débranché : la console HID n'existe pas dans ce
+     * montage, les LED oui.
+     */
+    RF_DIAG,
 
     KB_SAFE_RANGE,
 };

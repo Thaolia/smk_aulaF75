@@ -7,6 +7,7 @@
 #include "usbhw.h"
 #include "keyboard.h"
 #include "settings.h"
+#include "debug.h"
 #include <string.h>
 
 /*
@@ -279,6 +280,16 @@ static __xdata uint16_t deb_wired;
 static __xdata uint16_t deb_24g;
 static __xdata uint16_t deb_bt;
 
+/*
+ * Instantané lu par l'overlay de diagnostic de `indicators.c`.
+ *
+ * Un tableau plutôt qu'un accesseur : l'overlay tourne dans l'ISR Timer2, et un
+ * appel depuis l'ISR vers ce module ferait partager à la fonction appelée le
+ * recouvrement statique SDCC des fonctions de boucle principale -- exactement
+ * ce que `utils/check_interrupts.py` casse le build pour empêcher.
+ */
+__xdata uint8_t rf_diag_state[RF_DIAG_FIELDS];
+
 /* --------------------------------------------------------------------- ISR */
 
 /*
@@ -324,21 +335,54 @@ void rf_euart0_interrupt_handler(void) __interrupt(_INT_EUART0)
 /*
  * Prologue commun aux douze émetteurs d'usine : ne rien envoyer si une rafale
  * est déjà en cours (bit 0x2C.1) ou si le module n'est pas prêt (P4.7 bas).
+ *
+ * MAIS il y a DEUX portes, et la distinction est ce qui sort le clavier du
+ * mutisme. Le firmware d'usine teste P4.7 avant les rapports ; il ne le teste
+ * PAS avant les commandes de contrôle -- il émet les deux noms Bluetooth depuis
+ * `main` (0x9148, 0x914D) sans aucun garde. Traiter le contrôle comme un
+ * rapport crée un interblocage : si P4.7 reste bas, le link-select -- seule
+ * commande qui commute réellement le module -- n'est jamais émis, donc le
+ * module ne s'active pas, donc P4.7 ne monte pas.
+ *
+ * D'où le repli : le contrôle respecte la ligne tant qu'elle finit par monter,
+ * puis passe outre. Une rafale en vol n'est jamais écrasée, dans les deux cas.
  */
-static bool rf_can_send(void)
+#define RF_GATE_REPORT 0
+#define RF_GATE_CTRL   1
+
+/* ~200 passages de boucle principale : quelques dizaines de millisecondes. */
+#define RF_CTRL_STALL 200
+
+static __xdata uint8_t ctrl_stall;
+
+static bool rf_can_send(uint8_t gate)
 {
-    return !tx_busy && P4_7;
+    if (tx_busy) {
+        return false;
+    }
+    if (P4_7) {
+        ctrl_stall = 0;
+        return true;
+    }
+    if (gate != RF_GATE_CTRL) {
+        return false;
+    }
+    if (ctrl_stall < RF_CTRL_STALL) {
+        ctrl_stall++;
+        return false;
+    }
+    return true;
 }
 
 /*
  * `len` est la longueur TOTALE, somme de contrôle comprise. Les octets 0 à
  * len-2 doivent déjà être posés dans tx_buf.
  */
-static bool rf_send_frame(uint8_t len)
+static bool rf_send_frame(uint8_t len, uint8_t gate)
 {
     uint8_t sum = RF_SUM_SEED;
 
-    if (!rf_can_send() || len < 2 || len > RF_TX_MAX) {
+    if (!rf_can_send(gate) || len < 2 || len > RF_TX_MAX) {
         return false;
     }
 
@@ -371,15 +415,12 @@ static void rf_frame_begin(uint8_t cmd)
     tx_buf[1] = cmd;
 }
 
-static bool rf_send_short(uint8_t cmd, uint8_t p0, uint8_t p1)
+static bool rf_send_short(uint8_t cmd, uint8_t p0, uint8_t p1, uint8_t gate)
 {
-    if (!rf_can_send()) {
-        return false;
-    }
     rf_frame_begin(cmd);
     tx_buf[2] = p0;
     tx_buf[3] = p1;
-    return rf_send_frame(RF_LEN_SHORT);
+    return rf_send_frame(RF_LEN_SHORT, gate);
 }
 
 /*
@@ -405,7 +446,7 @@ static bool rf_send_short(uint8_t cmd, uint8_t p0, uint8_t p1)
  */
 static bool rf_send_link(rf_slot_t slot, uint8_t flag)
 {
-    return rf_send_short(RF_CMD_LINK, flag, (uint8_t)slot);
+    return rf_send_short(RF_CMD_LINK, flag, (uint8_t)slot, RF_GATE_CTRL);
 }
 
 /*
@@ -432,16 +473,13 @@ static const __code char rf_name_bt5[RF_NAME_LEN] = {
 
 static bool rf_send_name(uint8_t profile, const __code char *name)
 {
-    if (!rf_can_send()) {
-        return false;
-    }
     rf_frame_begin(RF_CMD_NAME);
     tx_buf[2] = profile;
     tx_buf[3] = RF_NAME_LEN;
     for (uint8_t i = 0; i < RF_NAME_LEN; i++) {
         tx_buf[4 + i] = (uint8_t)name[i];
     }
-    return rf_send_frame(RF_LEN_NAME);
+    return rf_send_frame(RF_LEN_NAME, RF_GATE_CTRL);
 }
 
 static rf_slot_t rf_link_slot(void)
@@ -457,7 +495,7 @@ static void rf_queue_link(uint8_t flag)
 
 static bool rf_send_status_probe(void)
 {
-    return rf_send_short(RF_CMD_STATUS, 0, 0);
+    return rf_send_short(RF_CMD_STATUS, 0, 0, RF_GATE_CTRL);
 }
 
 /* ------------------------------------------------------- trames de frappe */
@@ -503,7 +541,7 @@ static void rf_queue_report(uint8_t cmd, const __xdata uint8_t *data, uint8_t le
  */
 static void rf_queue_flush(void)
 {
-    while (q_count != 0 && rf_can_send()) {
+    while (q_count != 0 && rf_can_send(RF_GATE_REPORT)) {
         const __xdata uint8_t *slot = q_buf[q_tail];
         const uint8_t          len =
             (slot[0] == RF_CMD_REPORT_L) ? RF_LEN_REPORT_L : RF_LEN_REPORT_S;
@@ -512,7 +550,7 @@ static void rf_queue_flush(void)
         for (uint8_t i = 0; i < (uint8_t)(len - 2); i++) {
             tx_buf[1 + i] = slot[i];
         }
-        if (!rf_send_frame(len)) {
+        if (!rf_send_frame(len, RF_GATE_REPORT)) {
             return; /* on garde l'emplacement pour le prochain passage */
         }
         q_tail = (uint8_t)((q_tail + 1u) % RF_Q_SLOTS);
@@ -787,7 +825,9 @@ static void rf_tx_drain(void)
 static void rf_radio_on(void)
 {
     IEN1 |= _ES0;
+#ifndef RF_DEBUG_KEEP_USB
     usb_hw_deinit();
+#endif
     delay_ms(20);
 }
 
@@ -808,6 +848,7 @@ static void rf_enter_24g(void)
     if (link_state == RF_LINK_WIRED) {
         delay_ms(20); /* 0xEF8D : un temps de garde avant de couper l'USB */
     }
+    dprintf("rf enter 24g\r\n");
     link_state     = RF_LINK_24G;
     link_connected = 0;
     rf_radio_on();
@@ -819,6 +860,7 @@ static void rf_enter_bt(void)
     if (link_state == RF_LINK_WIRED) {
         delay_ms(20);
     }
+    dprintf("rf enter bt\r\n");
     link_state = RF_LINK_BT;
     if (bt_slot < RF_SLOT_BT1 || bt_slot > RF_SLOT_BT3) {
         bt_slot = RF_SLOT_BT1; /* borne d'usine : 1..3 */
@@ -836,9 +878,9 @@ static void rf_enter_bt(void)
 static void rf_enter_wired(void)
 {
     delay_ms(20);
-    (void)rf_send_short(RF_CMD_WIRED, 0, 0);
+    (void)rf_send_short(RF_CMD_WIRED, 0, 0, RF_GATE_CTRL);
     delay_ms(10);
-    (void)rf_send_short(RF_CMD_SETTINGS, 0, 0);
+    (void)rf_send_short(RF_CMD_SETTINGS, 0, 0, RF_GATE_CTRL);
     delay_ms(10);
 
     link_state      = RF_LINK_WIRED;
@@ -932,6 +974,7 @@ void rf_init(void)
     q_tail          = 0;
     q_count         = 0;
     deb_wired = deb_24g = deb_bt = 0;
+    ctrl_stall = 0;
 
     rf_uart_init();
     IEN1 &= (uint8_t)~_ES0; /* armée seulement quand un mode sans-fil est actif */
@@ -982,6 +1025,8 @@ static void rf_probe_task(void)
     }
 
     if (probe_misses >= RF_PROBE_MISSES) {
+        dprintf("rf link lost (p47=%u txb=%u q=%u)\r\n", (unsigned)P4_7,
+                (unsigned)tx_busy, (unsigned)q_count);
         probe_misses   = 0;
         link_connected = 0;
         /* Le firmware d'usine relâche ici la ligne d'émission (0x3D5A). */
@@ -1018,6 +1063,57 @@ static void rf_restore_settings(void)
     }
 }
 
+/*
+ * Trace la transition, pas l'état : imprimer à chaque passage noierait la
+ * console. Seuls les champs STABLES déclenchent -- `q_count` et `probe_misses`
+ * bougent en permanence en sans-fil et sont imprimés sans être surveillés.
+ *
+ * Compile à zéro hors build debug (`debug.h`).
+ */
+#if DEBUG == 1
+static __xdata uint8_t diag_prev[RF_DIAG_CONN + 1];
+
+static void rf_diag_trace(void)
+{
+    uint8_t i;
+    bool    changed = false;
+
+    for (i = 0; i <= RF_DIAG_CONN; i++) {
+        if (diag_prev[i] != rf_diag_state[i]) {
+            changed = true;
+            break;
+        }
+    }
+    if (!changed) {
+        return;
+    }
+    /*
+     * Le tampon console fait 128 octets et `console_putc` JETTE en silence quand
+     * il déborde. La bannière de démarrage et le vidage de `diag_task` le
+     * saturent : sans cette attente la toute première transition -- la plus
+     * intéressante, celle qui dit dans quel état le sélecteur a été lu au
+     * démarrage -- partait à la poubelle. `diag.c` se cadence exactement pareil.
+     *
+     * `diag_prev` n'est mis à jour QU'À l'émission réelle : une transition ne
+     * peut donc pas être perdue, seulement retardée.
+     */
+    if (!console_is_drained()) {
+        return;
+    }
+    for (i = 0; i <= RF_DIAG_CONN; i++) {
+        diag_prev[i] = rf_diag_state[i];
+    }
+    dprintf("rf 74=%u 45=%u 47=%u link=%u pend=%u name=%u txb=%u conn=%u q=%u miss=%u\r\n",
+            (unsigned)rf_diag_state[RF_DIAG_P74], (unsigned)rf_diag_state[RF_DIAG_P45],
+            (unsigned)rf_diag_state[RF_DIAG_P47], (unsigned)rf_diag_state[RF_DIAG_LINK],
+            (unsigned)rf_diag_state[RF_DIAG_TXPEND], (unsigned)rf_diag_state[RF_DIAG_NAME],
+            (unsigned)rf_diag_state[RF_DIAG_TXBUSY], (unsigned)rf_diag_state[RF_DIAG_CONN],
+            (unsigned)rf_diag_state[RF_DIAG_QCOUNT], (unsigned)rf_diag_state[RF_DIAG_MISSES]);
+}
+#else
+#    define rf_diag_trace() ((void)0)
+#endif
+
 void rf_task(void)
 {
     if (!settings_restored) {
@@ -1029,13 +1125,30 @@ void rf_task(void)
     rf_sample_selector();
 
     if (rf_is_wireless()) {
-        if (name_stage < 2 && rf_can_send()) {
+        /*
+         * Le link-select passe EN PREMIER, et son drapeau ne retombe qu'à la
+         * RÉUSSITE. Deux défauts corrigés d'un coup :
+         *
+         *  - il était placé DERRIÈRE les deux noms Bluetooth, donc otage de
+         *    leur réussite. Un seul échec figeait `name_stage`, et la seule
+         *    commande qui commute réellement le module n'était jamais émise --
+         *    matériel parfait ou non ;
+         *  - `link_tx_pending` était remis à zéro AVANT l'émission, dont le
+         *    retour était jeté : une commande refusée était perdue pour de bon,
+         *    alors que la mise en file existait justement pour la rejouer.
+         *
+         * Le firmware d'usine émet ses noms depuis `main`, hors de toute file.
+         */
+        if (link_tx_pending) {
+            if (rf_send_link(rf_link_slot(), link_tx_flag)) {
+                link_tx_pending = 0;
+                dprintf("rf link sent slot=%u flag=%u\r\n", (unsigned)rf_link_slot(),
+                        (unsigned)link_tx_flag);
+            }
+        } else if (name_stage < 2) {
             if (rf_send_name(name_stage, (name_stage == 0) ? rf_name_bt3 : rf_name_bt5)) {
                 name_stage++;
             }
-        } else if (link_tx_pending && rf_can_send()) {
-            link_tx_pending = 0;
-            (void)rf_send_link(rf_link_slot(), link_tx_flag);
         }
         rf_queue_flush();
         rf_probe_task();
@@ -1054,6 +1167,19 @@ void rf_task(void)
     keyboard_state.connected     = rf_connected() ? 1 : 0;
     keyboard_state.battery_level = (uint8_t)(((uint16_t)batt_shown * 7u) / 100u);
     keyboard_state.low_power     = batt_low ? 1 : 0;
+
+    rf_diag_state[RF_DIAG_P74]    = P7_4 ? 1 : 0;
+    rf_diag_state[RF_DIAG_P45]    = P4_5 ? 1 : 0;
+    rf_diag_state[RF_DIAG_P47]    = P4_7 ? 1 : 0;
+    rf_diag_state[RF_DIAG_LINK]   = (uint8_t)link_state;
+    rf_diag_state[RF_DIAG_TXPEND] = link_tx_pending ? 1 : 0;
+    rf_diag_state[RF_DIAG_NAME]   = name_stage;
+    rf_diag_state[RF_DIAG_TXBUSY] = tx_busy ? 1 : 0;
+    rf_diag_state[RF_DIAG_CONN]   = link_connected ? 1 : 0;
+    rf_diag_state[RF_DIAG_QCOUNT] = q_count;
+    rf_diag_state[RF_DIAG_MISSES] = probe_misses;
+
+    rf_diag_trace();
 }
 
 rf_link_t rf_link(void)
