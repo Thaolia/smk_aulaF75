@@ -2,8 +2,8 @@
 
 > ## ✅ 2026-09-11 — LE SANS-FIL FONCTIONNE, et la cause racine n'était pas dans le protocole
 >
-> **Frappe confirmée sur le dongle 2,4 GHz**, après la première mise en service de la radio sur
-> l'appareil. Ce qui bloquait n'était ni le brochage, ni le débit, ni la trame : **l'EUART0 perdait
+> **Frappe confirmée sur le dongle 2,4 GHz, appairage Bluetooth confirmé** -- les deux transports,
+> après la première mise en service de la radio sur l'appareil. Ce qui bloquait n'était ni le brochage, ni le débit, ni la trame : **l'EUART0 perdait
 > huit octets à chaque balayage de matrice.**
 
 ## La mise en service du sans-fil — ce que l'appareil a dit
