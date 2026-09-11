@@ -138,6 +138,21 @@ static volatile __data uint8_t  tx_idx;
 static volatile __bit           tx_busy;
 
 static __xdata uint8_t         rx_buf[RF_RX_MAX];
+/*
+ * FLUX BRUT. La capture par trame ne suffit pas : entre deux passages de
+ * `rf_task()` il arrive plusieurs trames -- la premiere capture montrait
+ * `02 00 01 00 00 52` DEUX FOIS dans un seul tampon -- et c'est justement le
+ * decoupage qui est en cause. On latche donc les soixante-quatre premiers
+ * octets tels qu'ils tombent de l'ISR, sans aucune interpretation, et l'analyse
+ * de trame se fait hors de la puce.
+ */
+#if DEBUG == 1
+#    define RF_CAP_RAW 64
+static __xdata uint8_t cap_raw[RF_CAP_RAW];
+static __xdata uint8_t cap_raw_n;
+static __xdata uint8_t cap_raw_shown;
+#endif
+
 /* Compteurs bruts, en XDATA : la RAM interne n'a que dix-neuf octets de marge. */
 static volatile __xdata uint8_t rx_total;
 static volatile __xdata uint8_t rx_last;
@@ -328,6 +343,11 @@ void rf_euart0_interrupt_handler(void) __interrupt(_INT_EUART0)
         const uint8_t byte = SBUF;
         rx_total++;
         rx_last = byte;
+#if DEBUG == 1
+        if (cap_raw_n < RF_CAP_RAW) {
+            cap_raw[cap_raw_n++] = byte;
+        }
+#endif
         if (rx_idx < RF_RX_MAX) {
             rx_buf[rx_idx++] = byte;
         }
@@ -732,6 +752,7 @@ static void rf_status_apply(void)
 #    define RF_CAP_FRAMES 3
 #    define RF_CAP_LEN    12
 
+
 static __xdata uint8_t cap_buf[RF_CAP_FRAMES][RF_CAP_LEN];
 static __xdata uint8_t cap_len[RF_CAP_FRAMES];
 static __xdata uint8_t cap_why[RF_CAP_FRAMES];
@@ -755,13 +776,24 @@ static void rf_rx_dump(uint8_t verdict)
     cap_n++;
 }
 
-/* Rejoue une trame par passage, quand la console a la place. */
+/* Rejoue huit octets bruts par passage, puis les trames, quand la console a la place. */
 static void rf_cap_replay(void)
 {
     uint8_t i;
     uint8_t len;
 
-    if (cap_shown >= cap_n || !console_is_drained()) {
+    if (!console_is_drained()) {
+        return;
+    }
+    if (cap_raw_shown < cap_raw_n) {
+        dprintf("raw+%02u:", (unsigned)cap_raw_shown);
+        for (i = 0; i < 8 && cap_raw_shown < cap_raw_n; i++) {
+            dprintf(" %02x", (unsigned)cap_raw[cap_raw_shown++]);
+        }
+        dprintf("\r\n");
+        return;
+    }
+    if (cap_shown >= cap_n) {
         return;
     }
     len = (cap_len[cap_shown] < RF_CAP_LEN) ? cap_len[cap_shown] : RF_CAP_LEN;
@@ -849,6 +881,27 @@ static void rf_uart_init(void)
     SBRTL = RF_SBRTL;
     SFINE = RF_SFINE;
     PCON |= _SSTAT; /* active les drapeaux d'erreur de réception */
+
+    /*
+     * PRIORITÉ MAXIMALE POUR L'EUART0. C'est la correction de fond.
+     *
+     * `tick.c` exécute le balayage COMPLET de la matrice et les sous-trames LED
+     * DANS l'ISR Timer2. Un balayage dure ~320 µs ; à 260 870 bauds un octet
+     * tombe toutes les 38 µs, et le SH68F90 n'a aucun tampon derrière `SBUF`.
+     * À priorité égale l'ISR série ne préempte pas : chaque balayage de matrice
+     * COÛTE HUIT OCTETS.
+     *
+     * Mesuré sur l'appareil. Le module émet `02 00 01 00 00 52` et
+     * `03 00 00 00 00 52` -- sommes de contrôle valides toutes les deux -- et le
+     * flux reçu n'en contenait que des morceaux : `02 00 00 52`, `02 00 52`,
+     * `02 00 01 00`. Aucune trame n'arrivait entière, donc aucune ne validait sa
+     * somme, donc `link_connected` ne montait jamais et le clavier restait muet.
+     *
+     * Le firmware d'usine pose exactement ce bit : `0xECC5` écrit `IPH1 = 0x42`
+     * et `IPL1 = 0x41`, bit 6 des deux côtés, soit le niveau 3.
+     */
+    IPH1 |= _ES0;
+    IPL1 |= _ES0;
     SADDR = 0x00;
     SADEN = 0x00;
 
