@@ -94,6 +94,60 @@ deux captures ont été perdues.
 
 
 
+## Frappe automatique — création, et les deux pièges qu'elle a révélés
+
+⚠️ **Aucun équivalent d'usine.** `Fn + Espace` ou `Fn + appui molette` lance un mode qui tape une
+lettre au hasard, l'efface d'un retour arrière, et recommence après une attente tirée au sort entre
+0,5 et 1,5 s. N'importe quelle touche l'arrête, et cette touche ne tape rien. Tout le clavier passe
+au rouge sourd pendant ce temps. Voir `aula_macro.c`.
+
+L'intérêt de la consigner ici n'est pas la fonction : ce sont **deux propriétés du cœur de SMK**
+qu'elle a mises au jour, et qui piégeront la prochaine fonction du même genre.
+
+**1. `kb_process_record()` ne voit pas les touches `MO()`.** `process_key_state()`
+(`src/smk/matrix.c`) traite la branche `IS_QK_MOMENTARY` **avant** d'appeler le crochet, et retourne
+tôt. Un crochet qui prétend voir « toutes les touches » ne voit donc pas `Fn`. Pire, le relâchement
+de `Fn` appelle `clear_keys()`, qui **vide le rapport clavier sans l'émettre** — ce qui désynchronise
+tout état qui croit tenir une touche enfoncée.
+
+Conséquence pour ce mode : la séquence d'activation `Fn↓ Espace↓ Espace↑ Fn↑` aurait vidé le rapport
+au milieu de la première lettre. D'où un état d'attente qui ne démarre la machine qu'une fois la
+matrice **entièrement relâchée**.
+
+**2. `user_matrix_pressed()` est l'état brut, et il voit tout.** Déclaré dans `kbdef.h`, alimenté par
+`user_matrix_read_rows()`, déjà masqué aux six lignes réelles (`| 0xc0` avant complément, sinon les
+bits 6 et 7 du complément seraient parasites). C'est lui qui rattrape `Fn`, invisible du crochet.
+**Aucune modification du cœur SMK n'a donc été nécessaire** — inutile d'exporter `matrix[]` ou
+`action_layer`, qui ne sont pas dans `matrix.h`.
+
+**Le garde-fou qui manquait.** Un état qui avale toutes les touches jusqu'au relâchement complet se
+verrouille définitivement si une touche reste collée : le clavier n'écrirait plus rien jusqu'au
+redémarrage. Cinq secondes d'attente maximum, puis retour au repos quoi qu'il arrive — et retour au
+repos plutôt que démarrage, sinon une touche collée enchaînerait annulation et redémarrage sans fin.
+
+**Base de temps.** Il n'existe pas de compteur de millisecondes libre. La sous-trame LED (~420 µs
+une fois les balayages de matrice amortis) est la seule cadence régulière, celle qu'utilise déjà
+`aula_encoder.c`. Une seconde vaut ~2 381 sous-trames : compteur 16 bits obligatoire, et le tick
+lève un bit plutôt que de laisser la boucle lire le compteur — un test de bit est atomique sur 8051,
+une lecture 16 bits ne l'est pas.
+
+**Hasard.** Xorshift16 semé à l'activation depuis `TH2`/`TL2` en vol. L'instant d'activation est
+décidé par un humain : c'est la seule entropie du MCU, et elle suffit à un tirage sans exigence
+cryptographique.
+
+**Ce que le mode ne garantit pas.** La lettre est annulée par le retour arrière, donc le texte reste
+inchangé — **sauf si l'application au premier plan traite `Ret. arrière` autrement qu'un effacement
+de caractère** (navigateur réglé sur « page précédente », recherche incrémentale, raccourci de jeu).
+C'est la seule fonction de ce clavier qui envoie des touches à l'hôte sans que personne n'en touche
+une.
+
+**Et il empêche la veille.** `sleep_note_activity()` est appelé à chaque pas, sinon le minuteur
+d'inactivité endort le clavier au bout d'une quinzaine de minutes et le mode s'arrête seul. En
+sans-fil, il vide donc la batterie tant qu'il tourne. C'est un choix, pas un oubli.
+
+
+
+
 ## `AULA_FX_LAKE` — l'onde qui part de la touche frappée
 
 ⚠️ **Cet effet n'est PAS une transcription.** Rien d'équivalent n'existe dans le firmware d'usine :

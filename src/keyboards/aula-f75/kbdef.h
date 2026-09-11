@@ -160,9 +160,14 @@ uint8_t user_matrix_pressed(uint8_t col);
  *   P7.4 = 1, P4.5 = 0  -> Bluetooth, slot choisi par LNK_BT1..3
  * P4.7 est la ligne « module prêt » : aucune trame ne part quand elle est basse.
  *
- * ÉTAT : ce pilote est transcrit du désassemblage. Il a été flashé et tourne,
- * mais aucune liaison n'a encore été établie -- ni 2,4 GHz, ni Bluetooth. Le
- * keycode RF_DIAG ci-dessous est l'instrument qui doit dire pourquoi.
+ * ÉTAT : transcrit du désassemblage, puis CONFIRMÉ SUR L'APPAREIL -- frappe par
+ * le dongle 2,4 GHz et appairage Bluetooth. La panne initiale n'était pas dans
+ * le pilote : `tick.c` balaie toute la matrice dans l'ISR Timer2 (~320 µs) et,
+ * à 260 870 bauds, un octet tombe toutes les 38 µs sans FIFO sur SBUF. À
+ * priorité égale l'EUART0 ne pouvait pas préempter et perdait huit octets par
+ * balayage. `rf_uart_init()` pose donc `IPH1/IPL1 |= _ES0`, comme l'usine
+ * (IPH1=0x42, IPL1=0x41). Le keycode RF_DIAG reste : c'est l'instrument qui l'a
+ * montré, et le seul utilisable sur batterie.
  * ------------------------------------------------------------------------- */
 
 enum custom_keycodes {
