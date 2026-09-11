@@ -73,7 +73,21 @@ _Static_assert(FREQ_SYS / 92 > 255000 && FREQ_SYS / 92 < 267000, "FREQ_SYS incom
  */
 #define RF_RX_MAX 23 /* le tampon d'usine, IDATA 0x54-0x6A */
 
+/*
+ * Longueurs relevées SUR L'APPAREIL, une fois la perte d'octets corrigée. La
+ * longueur dépend de l'octet 1 -- la commande acquittée -- et pas du seul type.
+ *
+ *   02 06 00 00 00 02 dd 03 01 6a   DIX octets : la réponse à la sonde d'état
+ *   02 01 00 00 00 52               SIX : accusé du link-select
+ *   02 02 00 00 00 51               SIX : accusé d'un rapport
+ *   03 00 00 00 00 52               SIX : annonce
+ *
+ * Toutes vérifiées par la somme d'usine `0x55 - Σ`. Le portage attendait dix
+ * octets pour TOUTE trame de type 0x02 : sur un accusé de six il avalait le
+ * début de la trame suivante et ne se recalait jamais.
+ */
 #define RF_RX_LEN_STATUS 10
+#define RF_RX_LEN_ACK    6
 #define RF_RX_LEN_BULK   22
 
 #define RF_RX_TYPE_STATUS   0x02
@@ -613,6 +627,35 @@ static bool rf_rx_checksum_ok(uint8_t len)
 
 /* Vide le tampon, l'IRQ masquée : sans ça un octet arrivé entre le test et la
  * remise à zéro se retrouverait attribué à la trame suivante. */
+/*
+ * Retire `len` octets en tête et conserve le reste.
+ *
+ * `rf_rx_drop()` jetait le tampon ENTIER après chaque trame : quand deux trames
+ * atterrissaient entre deux passages -- le cas normal à 260 kbauds contre une
+ * boucle principale en millisecondes -- la seconde était perdue. Et sur un type
+ * inconnu, tout jeter interdisait tout recalage : on retire maintenant UN seul
+ * octet et on retente.
+ */
+static void rf_rx_take(uint8_t len)
+{
+    const bool armed = (IEN1 & _ES0) != 0;
+
+    IEN1 &= (uint8_t)~_ES0;
+    if (len >= rx_idx) {
+        rx_idx = 0;
+    } else {
+        const uint8_t rest = (uint8_t)(rx_idx - len);
+        for (uint8_t i = 0; i < rest; i++) {
+            rx_buf[i] = rx_buf[len + i];
+        }
+        rx_idx = rest;
+    }
+    rx_pending = (rx_idx != 0);
+    if (armed) {
+        IEN1 |= _ES0;
+    }
+}
+
 static void rf_rx_drop(void)
 {
     const bool armed = (IEN1 & _ES0) != 0;
@@ -820,56 +863,50 @@ static void rf_cap_replay(void)
 
 static void rf_rx_consume(void)
 {
-    if (!rx_pending) {
-        return;
-    }
+    /* Plusieurs trames peuvent avoir atterri : on en traite jusqu'à quatre par
+     * passage, assez pour suivre la cadence du module sans monopoliser la boucle. */
+    for (uint8_t guard = 0; guard < 4 && rx_pending; guard++) {
+        uint8_t len;
 
-    switch (rx_buf[0]) {
-        case RF_RX_TYPE_STATUS:
-            if (rx_idx < RF_RX_LEN_STATUS) {
-                return; /* trame incomplète : on laisse le reste arriver */
-            }
-            /*
-             * Les deux gardes du firmware d'usine, avant même la somme :
-             * l'octet 1 vaut 6 (c'est la réponse à la commande 0x06) et
-             * l'octet 2 est imposé à 0.
-             */
-            if (rx_buf[1] == RF_CMD_STATUS && rx_buf[2] == 0 &&
-                rf_rx_checksum_ok(RF_RX_LEN_STATUS - 1)) {
-                probe_answered = 1;
-                rf_status_apply();
-                rf_rx_dump(RF_WHY_OK02);
-            } else {
-                rf_rx_dump(RF_WHY_BAD02);
-            }
-            break;
+        switch (rx_buf[0]) {
+            case RF_RX_TYPE_STATUS:
+                len = (rx_buf[1] == RF_CMD_STATUS) ? RF_RX_LEN_STATUS : RF_RX_LEN_ACK;
+                break;
+            case RF_RX_TYPE_ANNOUNCE:
+                len = RF_RX_LEN_ACK;
+                break;
+            case RF_RX_TYPE_BULK:
+                len = RF_RX_LEN_BULK;
+                break;
+            default:
+                rf_rx_take(1); /* octet parasite : recaler, pas tout jeter */
+                continue;
+        }
 
-        case RF_RX_TYPE_BULK:
-            if (rx_idx < RF_RX_LEN_BULK) {
-                return;
-            }
-            (void)rf_rx_checksum_ok(RF_RX_LEN_BULK - 1);
+        if (rx_idx < len) {
+            return; /* trame incomplète : laisser le reste arriver */
+        }
+        if (!rf_rx_checksum_ok((uint8_t)(len - 1))) {
+            rf_rx_dump(RF_WHY_BAD02);
+            rf_rx_take(1);
+            continue;
+        }
+
+        /* Somme juste : le module a parlé, et proprement. C'est ce que la sonde
+         * de présence attend, quelle que soit la trame. */
+        probe_answered = 1;
+
+        if (rx_buf[0] == RF_RX_TYPE_STATUS && rx_buf[1] == RF_CMD_STATUS && rx_buf[2] == 0) {
+            rf_status_apply();
+            rf_rx_dump(RF_WHY_OK02);
+        } else if (rx_buf[0] == RF_RX_TYPE_BULK) {
             /* Conteneur à sous-commandes : rien n'en dépend dans ce portage. */
             rf_rx_dump(RF_WHY_BULK);
-            break;
-
-        case RF_RX_TYPE_ANNOUNCE:
-            /*
-             * Annonce de connexion. Le firmware d'usine ne vérifie aucune somme
-             * ici et sa longueur n'est pas établie ; on se contente du type, qui
-             * prouve que le module parle.
-             */
-            probe_answered = 1;
+        } else {
             rf_rx_dump(RF_WHY_ANN);
-            break;
-
-        default:
-            /* Type inconnu : on jette plutôt que de tenter un recalage. */
-            rf_rx_dump(RF_WHY_TYPE);
-            break;
+        }
+        rf_rx_take(len);
     }
-
-    rf_rx_drop();
 }
 
 /* ------------------------------------------------------- machine à états */
