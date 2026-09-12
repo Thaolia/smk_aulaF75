@@ -2,6 +2,7 @@
 #include "sh68f90.h"
 #include "host.h"
 #include <stdint.h>
+#include <stdbool.h>
 
 /*
  * Décodeur en quadrature, transcrit de `fcn.00007928`.
@@ -37,6 +38,35 @@
 #define ENC_GAP  4
 #define ENC_HOLD (ENC_GAP + 8)
 
+/*
+ * BATTEMENT DE LA MOLETTE.
+ *
+ * Le motif est celui du coeur de la frappe automatique, mais sa CADENCE suit le
+ * sens : monter accélère, descendre ralentit. C'est le seul retour possible sur
+ * cette action -- l'hôte ne dit jamais au clavier où en est son volume, donc le
+ * niveau affiché est RELATIF, pas le volume réel.
+ *
+ * Les huit cadences sont quasi géométriques : l'oreille et l'oeil perçoivent le
+ * tempo en rapport, pas en différence. 256 = un pas de motif par bouclage de
+ * balayage (~37,9 ms), soit ~910 ms le cycle complet. La table part donc de
+ * trois fois et demie plus lent et monte à un peu moins du double.
+ */
+#define ENC_BEAT_LEVELS 8
+#define ENC_BEAT_START  3
+
+/* ~1,5 s après la dernière détente, en sous-trames de ~420 µs. */
+#define ENC_BEAT_HOLD 3570u
+
+static const __code uint16_t enc_beat_rates[ENC_BEAT_LEVELS] = {
+    56, 83, 112, 151, 203, 269, 350, 448,
+};
+
+/* Touchés uniquement depuis l'ISR -- `aula_encoder_sample()` les écrit, le rendu
+ * LED les lit, et les deux vivent dans l'ISR Timer2. Aucune section critique à
+ * poser, et aucune lecture 16 bits à cheval sur une écriture. */
+static __xdata uint8_t  beat_lvl = ENC_BEAT_START;
+static __xdata uint16_t beat_to;
+
 static volatile __data uint8_t enc_hold;
 static volatile __data int8_t  enc_pending;
 static volatile __bit          enc_release_due;
@@ -50,6 +80,10 @@ static __xdata uint8_t enc_hist;
 void aula_encoder_sample(void)
 {
     uint8_t now;
+
+    if (beat_to != 0) {
+        beat_to--;
+    }
 
     if (enc_hold != 0) {
         enc_hold--;
@@ -72,9 +106,28 @@ void aula_encoder_sample(void)
      */
     if (enc_hist == 0x0B || enc_hist == 0x34) {
         if (enc_pending < 8) enc_pending++;
+        if (beat_lvl < (uint8_t)(ENC_BEAT_LEVELS - 1)) beat_lvl++;
+        beat_to = ENC_BEAT_HOLD;
     } else if (enc_hist == 0x07 || enc_hist == 0x38) {
         if (enc_pending > -8) enc_pending--;
+        if (beat_lvl != 0) beat_lvl--;
+        beat_to = ENC_BEAT_HOLD;
     }
+}
+
+bool aula_encoder_beating(void)
+{
+    return beat_to != 0;
+}
+
+uint16_t aula_encoder_beat_rate(void)
+{
+    return enc_beat_rates[beat_lvl];
+}
+
+uint8_t aula_encoder_beat_level(void)
+{
+    return beat_lvl;
 }
 
 void aula_encoder_task(void)

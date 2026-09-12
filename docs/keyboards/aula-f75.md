@@ -289,6 +289,34 @@ ici même.
 
 
 
+## Le battement de la molette — deux grandeurs, deux canaux
+
+La rotation n'a aucun retour : l'hôte ne dit jamais au clavier où en est son volume, ni en USB ni
+dans le protocole du BK3632. Le clavier ne peut donc afficher qu'un état **relatif**, celui qu'il
+mémorise lui-même.
+
+Le motif est celui du coeur de la frappe automatique, réemployé tel quel. Ce qui change, c'est que
+**deux grandeurs indépendantes** sont encodées sur deux canaux distincts :
+
+| Canal | Ce qu'il dit | Plage |
+| --- | --- | --- |
+| **cadence** | le sens de la dernière détente | cycle de 4,2 s à 0,5 s, huit crans |
+| **teinte** | le cran atteint | rouge → rose → magenta → violet, huit crans |
+
+Le trajet de teinte est le **court** : pas de jaune, pas de vert, pas de cyan. Huit teintes voisines
+se comparent d'un coup d'oeil ; huit teintes d'arc-en-ciel se confondraient avec le moteur d'effets,
+qui occupe déjà tout le spectre.
+
+Les cadences sont quasi géométriques, pas linéaires — le tempo se perçoit en rapport, comme une
+hauteur de son. L'avance du motif passe par un accumulateur en 1/256e de pas, relevé au bouclage du
+balayage de régénération : **la même contrainte que pour les motifs du voyant d'état**, les
+quatre-vingt-dix cellules étant repeintes une par sous-trame.
+
+L'état vit dans `aula_encoder.c` et le rendu dans `indicators.c` — la teinte est une affaire de
+rendu, le cran une affaire de molette, et `aula_encoder_beat_level()` est la seule chose qui passe
+de l'une à l'autre.
+
+
 ## La trame courte — le Report ID était l'octet de trop
 
 **Symptôme :** en 2,4 GHz et en Bluetooth, la molette et les touches multimédia ne faisaient rien,

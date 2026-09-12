@@ -798,6 +798,34 @@ static const __code uint8_t macro_heart[MACRO_HEART_STEPS] = {
 static __xdata uint8_t macro_beat;
 static __bit           macro_was_on;
 
+/*
+ * Les huit teintes du battement de molette, du rouge au violet.
+ *
+ * Le trajet est le COURT : rouge -> rose -> magenta -> violet, sans passer par
+ * le jaune, le vert ni le cyan. C'est la plage demandée, et elle a l'avantage
+ * de rester lisible d'un coup d'oeil -- huit teintes voisines se comparent,
+ * huit teintes de l'arc-en-ciel se confondent avec le moteur d'effets.
+ *
+ * Teinte pure, saturation et valeur au maximum : c'est le motif du coeur qui
+ * porte la luminosité, la table ne porte que la couleur.
+ */
+static const __code uint8_t enc_beat_hue[8][3] = {
+    {255,   0,   0}, /* 0 - rouge      */
+    {255,   0,  55},
+    {255,   0, 109},
+    {255,   0, 164}, /* 3 - le cran de départ, rose magenta */
+    {255,   0, 218},
+    {237,   0, 255},
+    {182,   0, 255},
+    {128,   0, 255}, /* 7 - violet     */
+};
+
+/* Le battement de la molette rejoue le MÊME motif que le coeur, à une cadence
+ * variable. L'accumulateur en 1/256e de pas évite une division par bouclage. */
+static __xdata uint8_t  enc_beat;
+static __xdata uint16_t enc_acc;
+static __bit            enc_was_beating;
+
 /* ------------------------------------------------------------ Verr. Maj
  *
  * Le rapport LED HID de l'hôte arrive par `usb_ep0_out_irq()` et atterrit dans
@@ -912,6 +940,23 @@ static void led_regen_one(void)
          * lequel on laisse le clavier tourner seul.
          */
         aula_rgb_set(regen_row, regen_col, macro_heart[macro_beat], 0, 0);
+        goto advance;
+    }
+
+    if (aula_encoder_beating()) {
+        /*
+         * Retour de rotation : même motif que la frappe automatique, mais la
+         * TEINTE dit le cran -- rouge en bas, violet en haut -- pendant que la
+         * CADENCE dit le sens. Deux grandeurs, deux canaux, rien à confondre.
+         *
+         * Court-circuite la luminosité utilisateur, comme tous les overlays de
+         * ce fichier : un retour qu'on ne voit pas n'est pas un retour.
+         */
+        const uint8_t lvl = aula_encoder_beat_level();
+        const uint8_t v   = macro_heart[enc_beat];
+
+        aula_rgb_set(regen_row, regen_col, led_scale(enc_beat_hue[lvl][0], v),
+                     led_scale(enc_beat_hue[lvl][1], v), led_scale(enc_beat_hue[lvl][2], v));
         goto advance;
     }
 
@@ -1106,6 +1151,17 @@ advance:
             if (++macro_beat >= MACRO_HEART_STEPS) {
                 macro_beat = 0;
             }
+            /* La cadence de la molette est fractionnaire : au plus trois pas par
+             * bouclage à la vitesse maximale, donc la boucle est bornée. */
+            if (aula_encoder_beating()) {
+                enc_acc = (uint16_t)(enc_acc + aula_encoder_beat_rate());
+                while (enc_acc >= 256u) {
+                    enc_acc = (uint16_t)(enc_acc - 256u);
+                    if (++enc_beat >= MACRO_HEART_STEPS) {
+                        enc_beat = 0;
+                    }
+                }
+            }
             aula_status_tick();
             /* La phase avance DANS la porte de trame, comme en usine : le rendu
              * d'usine est entièrement conditionné à `tic >= période`. */
@@ -1175,16 +1231,26 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
         macro_was_on = 0;
     }
 
+    if (aula_encoder_beating()) {
+        if (!enc_was_beating) {
+            enc_was_beating = 1;
+            enc_beat        = 0; /* démarrer sur un coup, pas au milieu du repos */
+            enc_acc         = 0;
+        }
+    } else {
+        enc_was_beating = 0;
+    }
+
     if (user_settings.led_effect == AULA_FX_REACTIVE ||
         user_settings.led_effect == AULA_FX_LAKE) {
         led_react_poll();
     }
 
 #ifdef RF_EUART0
-    if (aula_macro_active() || caps_on || aula_status_lit() || rf_diag_on ||
-        user_settings.led_effect < AULA_FX_OFF) {
+    if (aula_macro_active() || aula_encoder_beating() || caps_on || aula_status_lit() ||
+        rf_diag_on || user_settings.led_effect < AULA_FX_OFF) {
 #else
-    if (aula_macro_active() || caps_on || aula_status_lit() ||
+    if (aula_macro_active() || aula_encoder_beating() || caps_on || aula_status_lit() ||
         user_settings.led_effect < AULA_FX_OFF) {
 #endif
         led_regen_one();
