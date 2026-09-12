@@ -4,7 +4,8 @@
 #include <stdint.h>
 
 /*
- * Mode « compensation AZERTY » de l'AULA F75.
+ * Mode « compensation AZERTY » de l'AULA F75. Persisté en flash : le clavier
+ * repart dans le mode où on l'a laissé.
  *
  * Le clavier est un 75 % ANSI dont les capuchons portent la disposition US
  * International. Quand l'hôte est réglé en AZERTY français (Windows fr-FR), les
@@ -28,6 +29,13 @@
 
 /* Depuis `kb_process_record` : bascule le mode (touche LAYOUT_AZ enfoncée). */
 void aula_layout_toggle(void);
+
+/*
+ * Depuis `indicators_validate_settings()`, juste après le chargement de la NVM.
+ * PAS depuis `kb_init()` : celui-ci tourne AVANT `restore_settings()` dans
+ * `main()`, il n'y aurait rien à lire.
+ */
+void aula_layout_restore(bool on);
 
 /*
  * Depuis `kb_process_record`, pour TOUT évènement de touche. Rend true quand

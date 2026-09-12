@@ -1216,6 +1216,7 @@ void indicators_apply_defaults(void)
     user_settings.led_speed      = LED_SPEED_DEFAULT;
     user_settings.ul_effect      = AULA_FX_COLOR_WHEEL; /* arc-en-ciel, comme en usine */
     user_settings.ul_brightness  = 0;                   /* sens avant, bit 0x23 effacé */
+    user_settings.ul_speed       = 0;                   /* compensation AZERTY éteinte */
 }
 
 void indicators_validate_settings(void)
@@ -1235,6 +1236,14 @@ void indicators_validate_settings(void)
     if (user_settings.ul_brightness > 1) {
         user_settings.ul_brightness = 0;
     }
+    if (user_settings.ul_speed > 1) {
+        user_settings.ul_speed = 0;
+    }
+
+    /* La compensation AZERTY est persistée dans `ul_speed` -- voir
+     * `aula_layout.c`. C'est ici qu'elle est rendue au module, et pas dans
+     * `kb_init()` : celui-ci tourne AVANT `restore_settings()`. */
+    aula_layout_restore(user_settings.ul_speed != 0);
 }
 
 void indicators_init(void)

@@ -3,7 +3,23 @@
 #include "sh68f90.h"
 #include "report.h"
 #include "keycodes.h"
+#include "settings.h"
 #include <stdint.h>
+
+/*
+ * PERSISTANCE DU MODE.
+ *
+ * `user_settings.ul_speed` est libre sur ce clavier : la structure partagée le
+ * réserve à la vitesse de l'éclairage d'ambiance, que le F75 n'a pas, et son
+ * unique consommateur est le NuPhy Air60. On y range le mode plutôt que
+ * d'allonger `user_settings_t` -- ce qui ferait retomber TOUS les réglages
+ * enregistrés au premier démarrage, `nvm.c` comparant la longueur du bloc.
+ *
+ * Même arbitrage et même raison que `AULA_SETTINGS_BT_SLOT` dans `aula_rf.c`.
+ * Le nom de l'alias est là pour que personne ne relise `ul_speed` en croyant y
+ * trouver une vitesse.
+ */
+#define AULA_SETTINGS_AZ user_settings.ul_speed
 
 /*
  * La plage traduite : de `KC_A` à `KC_SLASH`, les seuls keycodes qui produisent
@@ -269,9 +285,21 @@ void aula_layout_toggle(void)
     az_on = !az_on;
     az_reset();
 
+    AULA_SETTINGS_AZ = az_on ? 1u : 0u;
+    settings_mark_dirty(); /* `settings_task()` écrit la flash au tour suivant */
+
     aula_status_set_azerty(az_on ? true : false);
     aula_status_event(az_on ? (uint8_t)AULA_STATUS_AZERTY_ON
                             : (uint8_t)AULA_STATUS_AZERTY_OFF);
+}
+
+void aula_layout_restore(bool on)
+{
+    az_on = on ? 1 : 0;
+    aula_status_set_azerty(on);
+    /* Pas de motif de basculement au démarrage : la lueur fixe suffit à dire
+     * dans quel mode le clavier repart, et l'annonce du transport passerait
+     * devant de toute façon. */
 }
 
 void aula_layout_euro(void)
