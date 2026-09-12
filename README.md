@@ -6,6 +6,14 @@
 
 [![Build](https://github.com/carlossless/smk/actions/workflows/build.yml/badge.svg)](https://github.com/carlossless/smk/actions/workflows/build.yml) [![](https://img.shields.io/badge/discord-SMK-blue)](https://discord.gg/SZFBDBuxrK)
 
+## About This Fork
+
+This fork adds a port for the **Epomaker × AULA F75** (classic model), reverse-engineered and built entirely from a stock firmware dump — see [docs/keyboards/aula-f75.md](docs/keyboards/aula-f75.md) for the full write-up (wireless protocol, RGB engine, encoder, macros).
+
+It has only been tested on the maintainer's own unit. Hardware revisions may differ, so proceed at your own risk and keep a full stock firmware backup before flashing (see the warning below).
+
+Everything else in this README describes the upstream SMK project this fork is based on.
+
 This is a keyboard firmware similar to [QMK](https://github.com/qmk/qmk_firmware), but targeting 8051-based devices like the SinoWealth SH68F90A (labeled as BYK916 or BYK901) and the SH68F881.
 
 The S (Small) in SMK comes from this firmware using [SDCC](https://sdcc.sourceforge.net/) to build itself.
@@ -23,6 +31,7 @@ You can very easily end up with a bricked device if the written firmware can't j
 | [NuPhy Air60 v1](https://nuphy.com/products/air60) | SH68F90A / BYK916 | ✅ | ✅ | 2.4G (BT WIP) | [Details](docs/keyboards/nuphy-air60.md) |
 | E-YOOSO Z11 | SH68F90A / BYK901 | ✅ | ✅ | N/A | [Details](docs/keyboards/eyooso-z11.md) |
 | Genesis Thor 300 | SH68F881 / BYK801 | ✅ | ✅ | N/A | [Details](docs/keyboards/genesis-thor-300.md) |
+| Epomaker × AULA F75 | SH68F90A / BYK916 | ✅ | ✅ | 2.4G + BT | [Details](docs/keyboards/aula-f75.md) |
 
 Platform notes: [SH68F90 / SH68F90A](docs/platforms/sh68f90.md), [SH68F881](docs/platforms/sh68f881.md).
 
