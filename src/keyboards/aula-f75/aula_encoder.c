@@ -46,10 +46,13 @@
  * cette action -- l'hôte ne dit jamais au clavier où en est son volume, donc le
  * niveau affiché est RELATIF, pas le volume réel.
  *
- * Les huit cadences sont quasi géométriques : l'oreille et l'oeil perçoivent le
- * tempo en rapport, pas en différence. 256 = un pas de motif par bouclage de
- * balayage (~37,9 ms), soit ~910 ms le cycle complet. La table part donc de
- * trois fois et demie plus lent et monte à un peu moins du double.
+ * Les huit cadences sont géométriques, de raison ~1,159 : l'oreille et l'oeil
+ * perçoivent le tempo en rapport, pas en différence, donc des crans également
+ * espacés en rapport se lisent comme également espacés.
+ *
+ * 256 = un pas de motif par bouclage de balayage (~37,9 ms). Le cycle complet
+ * fait 24 pas, donc cycle_ms = 24 x 256 x 37,9 / cadence : la table couvre
+ * 2,8 s au plus bas à 1,0 s au plus haut.
  */
 #define ENC_BEAT_LEVELS 8
 #define ENC_BEAT_START  3
@@ -58,7 +61,7 @@
 #define ENC_BEAT_HOLD 3570u
 
 static const __code uint16_t enc_beat_rates[ENC_BEAT_LEVELS] = {
-    56, 83, 112, 151, 203, 269, 350, 448,
+    83, 96, 111, 129, 150, 174, 201, 233,
 };
 
 /* Touchés uniquement depuis l'ISR -- `aula_encoder_sample()` les écrit, le rendu

@@ -300,7 +300,7 @@ Le motif est celui du coeur de la frappe automatique, réemployé tel quel. Ce q
 
 | Canal | Ce qu'il dit | Plage |
 | --- | --- | --- |
-| **cadence** | le sens de la dernière détente | cycle de 4,2 s à 0,5 s, huit crans |
+| **cadence** | le sens de la dernière détente | cycle de 2,8 s à 1,0 s, huit crans |
 | **teinte** | le cran atteint | rouge → rose → magenta → violet, huit crans |
 
 Le trajet de teinte est le **court** : pas de jaune, pas de vert, pas de cyan. Huit teintes voisines
