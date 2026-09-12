@@ -297,21 +297,31 @@ d'usine. Voir `src/keyboards/aula-f75/aula_layout.c`.
 
 ### Ce que l'hôte français sait déjà faire — et qui a évité d'écrire une table de composition
 
-Quatre des cinq touches mortes d'US International ont un **équivalent mort côté fr-FR**. Pour
-celles-là, le clavier émet la touche morte de l'hôte et **c'est l'hôte qui compose** : zéro état,
-zéro table de combinaisons.
+Trois des cinq touches mortes d'US International se contentent de celle de l'hôte : le clavier
+l'émet et **c'est l'hôte qui compose** -- zéro état, zéro table de combinaisons.
 
-| Touche morte US Intl | Équivalent fr-FR émis | Donne |
-| --- | --- | --- |
-| `^` (Maj+6) | `KC_LEFT_BRACKET` | `â ê î ô û` |
-| `"` (Maj+`'`) | Maj + `KC_LEFT_BRACKET` | `ä ë ï ö ü ÿ` |
-| `` ` `` | AltGr + `KC_7` | `à è ù` |
-| `~` (Maj+`` ` ``) | AltGr + `KC_2` | `ñ ã õ` |
+| Touche morte US Intl | Équivalent fr-FR émis | Donne | Symbole nu |
+| --- | --- | --- | --- |
+| `^` (Maj+6) | `KC_LEFT_BRACKET` | `â ê î ô û` | `^` ✔ |
+| `` ` `` | AltGr + `KC_7` | `à è ù` | `` ` `` ✔ |
+| `~` (Maj+`` ` ``) | AltGr + `KC_2` | `ñ ã õ` | `~` ✔ |
+| `"` (Maj+`'`) | Maj + `KC_LEFT_BRACKET` | `ä ë ï ö ü ÿ` | **`¨` ✘** |
 
-**Seul l'accent aigu a demandé une machine à états** : le fr-FR n'a aucune touche morte aiguë, `é` y
-est une touche à part entière. D'où la résolution en dur `e → KC_2`, `c → KC_9`, `Espace → KC_4`, et
-le repli d'US International — l'apostrophe puis le caractère — pour tout le reste. `á í ó ú ý` ne
-sont **pas produisibles** sur cette disposition cible.
+**Deux ont demandé une machine à états**, et la seconde n'a été trouvée qu'à l'essai sur
+l'appareil :
+
+* **l'accent aigu**, parce que le fr-FR n'en a aucun -- `é` y est une touche à part entière. D'où la
+  résolution en dur `e → KC_2`, `c → KC_9`, `Espace → KC_4`, et le repli d'US International
+  (l'apostrophe puis le caractère) pour tout le reste. `á í ó ú ý` ne sont **pas produisibles** sur
+  cette disposition cible.
+* **le tréma**, parce que le fr-FR en a une vraie — la composition marchait — mais que **son symbole
+  nu est `¨` et non `"`**. C'est la seule des quatre dont le caractère seul diffère de celui d'US
+  International, donc la seule qui ne pouvait pas être un passe-plat. Le guillemet vit sur `KC_3`
+  (non shifté) en AZERTY : `"` + `Espace` l'émet directement, `"` + lettre passe par la touche morte
+  de l'hôte.
+
+⚠️ **Aucune analyse statique n'aurait trouvé ça.** La table de l'hôte composait correctement ; c'est
+le cas dégénéré -- la touche morte *sans* caractère à composer -- qui diverge. Il a fallu le taper.
 
 ### `weak_mods` était un mécanisme à moitié construit
 

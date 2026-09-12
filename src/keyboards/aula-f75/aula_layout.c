@@ -18,6 +18,8 @@
 #define AZ_SH  0x01u /* injecter Maj */
 #define AZ_AG  0x02u /* injecter AltGr */
 #define AZ_ACU 0x04u /* accent aigu : touche morte tenue par le firmware */
+#define AZ_DIA 0x08u /* tréma       : touche morte tenue par le firmware */
+#define AZ_DEAD (AZ_ACU | AZ_DIA)
 #define AZ_RAW 0x80u /* ne rien injecter NI masquer -- voie des raccourcis */
 
 /* Les deux Maj. Le masque les retire de `real_mods` : sur un hôte AZERTY le `!`
@@ -93,7 +95,7 @@ static const __code az_ent_t az_map[AZ_N][2] = {
     /* \    |    */ {{0x25, AZ_AG}, {0x23, AZ_AG}},
     /* ---  ---  */ {{0x32, 0}, {0x32, 0}},
     /* ;    :    */ {{0x36, 0}, {0x37, 0}},
-    /* '    "    */ {{0x21, AZ_ACU}, {0x2F, AZ_SH}},
+    /* '    "    */ {{0x21, AZ_ACU}, {0x20, AZ_DIA}},
     /* `    ~    */ {{0x24, AZ_AG}, {0x1F, AZ_AG}},
     /* ,    <    */ {{0x10, 0}, {0x64, 0}},
     /* .    >    */ {{0x36, AZ_SH}, {0x64, AZ_SH}},
@@ -114,11 +116,11 @@ static const __code az_ent_t az_map[AZ_N][2] = {
 #define AZ_GAP  4
 
 /*
- * Garde-fou de la touche morte. US International n'a pas de délai, mais un `'`
+ * Garde-fou des touches mortes. US International n'a pas de délai, mais un `'`
  * oublié mangerait la frappe suivante -- des heures plus tard. Au bout de trois
- * secondes, l'apostrophe part seule.
+ * secondes, le symbole seul part.
  */
-#define AZ_ACUTE_MAX AZ_MS(3000)
+#define AZ_DEAD_MAX AZ_MS(3000)
 
 /* File d'émission. Puissance de deux : l'avance se fait au masque. */
 #define AZ_Q 4
@@ -150,15 +152,17 @@ static __xdata uint8_t az_cur;
  * n'a que dix-sept octets de marge en RAM interne, et l'ISR accède déjà à la
  * XRAM en permanence pour le rendu. */
 static volatile __xdata uint16_t az_wait;
-static volatile __xdata uint16_t az_acute_to;
+static volatile __xdata uint16_t az_dead_to;
 
 /* L'ISR lève ces bits plutôt que de laisser la boucle lire les compteurs : un
  * test de bit est atomique sur 8051, une lecture 16 bits ne l'est pas -- et un
  * mot lu à cheval sur une décrémentation peut valoir zéro à tort. */
 static volatile __bit az_due;
-static volatile __bit az_acute_due;
+static volatile __bit az_dead_due;
 
-static __bit az_acute;
+/* La touche morte en attente : 0, AZ_ACU ou AZ_DIA -- les valeurs de la table
+ * elle-même, il n'y a donc rien à traduire entre les deux. */
+static __xdata uint8_t az_dead;
 
 static void az_mods_apply(uint8_t fl)
 {
@@ -237,11 +241,11 @@ static uint8_t az_track_del(uint8_t us)
 static void az_reset(void)
 {
     az_arm(0);
-    ET2         = 0;
-    az_acute_to = 0;
-    ET2         = 1;
-    az_acute_due = 0;
-    az_acute     = 0;
+    ET2        = 0;
+    az_dead_to = 0;
+    ET2        = 1;
+    az_dead_due = 0;
+    az_dead     = 0;
 
     az_q_head = 0;
     az_q_tail = 0;
@@ -309,8 +313,8 @@ bool aula_layout_intercept(uint16_t qcode, bool pressed)
     if (mods & AZ_OTHER_MODS) {
         /* Raccourci : traduire la position, n'injecter ni masquer rien.
          * `Ctrl+A` devient `Ctrl+KC_Q`, `Ctrl+1` reste `Ctrl+1`. */
-        az_acute = 0;
-        kc       = az_map[idx][0].kc;
+        az_dead = 0;
+        kc      = az_map[idx][0].kc;
         if (!az_track_add((uint8_t)qcode, kc)) {
             return false;
         }
@@ -326,14 +330,41 @@ bool aula_layout_intercept(uint16_t qcode, bool pressed)
         kc = az_map[idx][st].kc;
         fl = az_map[idx][st].fl;
 
-        if (az_acute) {
-            az_acute = 0;
-            ET2         = 0;
-            az_acute_to = 0;
-            ET2         = 1;
-            az_acute_due = 0;
+        if (az_dead != 0) {
+            const uint8_t d = az_dead;
 
-            /* Le fr-FR n'a pas de touche morte aiguë : `é` et `ç` sont des
+            az_dead     = 0;
+            ET2         = 0;
+            az_dead_to  = 0;
+            ET2         = 1;
+            az_dead_due = 0;
+
+            if (d == AZ_DIA) {
+                /*
+                 * Le fr-FR a une VRAIE touche morte tréma -- Maj + `KC_LBRC` --
+                 * et c'est l'hôte qui compose. Mais son tréma suivi d'un espace
+                 * rend `¨`, PAS `"` : c'est la seule des quatre touches mortes de
+                 * l'hôte dont le symbole seul diffère de celui d'US
+                 * International, donc la seule qui ne peut pas être un simple
+                 * passe-plat. Mesuré sur l'appareil.
+                 */
+                /* La borne basse est déjà garantie : la fonction rend la main
+                 * plus haut pour tout `qcode` sous `AZ_FIRST`, qui vaut `KC_A`.
+                 * La retester ferait supprimer le test par l'optimiseur, et
+                 * `--Werror` en fait une erreur (SDCC 110). */
+                if (qcode <= KC_Z) {
+                    az_push(0x2Fu, AZ_SH); /* tréma mort : l'hôte compose */
+                    az_push(kc, fl);
+                } else if (qcode == KC_SPACE) {
+                    az_push(0x20u, 0); /* `"` -- sans Maj sur AZERTY */
+                } else {
+                    az_push(0x20u, 0);
+                    az_push(kc, fl);
+                }
+                return true;
+            }
+
+            /* Le fr-FR n'a PAS de touche morte aiguë : `é` et `ç` sont des
              * touches à part entière, et `á í ó ú ý` ne sont pas produisibles.
              * Pour tout le reste, le repli d'US International -- l'apostrophe
              * puis le caractère. */
@@ -350,12 +381,12 @@ bool aula_layout_intercept(uint16_t qcode, bool pressed)
             return true;
         }
 
-        if (fl & AZ_ACU) {
-            az_acute = 1;
+        if (fl & AZ_DEAD) {
+            az_dead     = (uint8_t)(fl & AZ_DEAD);
             ET2         = 0;
-            az_acute_to = AZ_ACUTE_MAX;
+            az_dead_to  = AZ_DEAD_MAX;
             ET2         = 1;
-            az_acute_due = 0;
+            az_dead_due = 0;
             return true; /* touche morte : rien n'est émis */
         }
 
@@ -387,21 +418,22 @@ void aula_layout_tick(void)
             az_due = 1;
         }
     }
-    if (az_acute_to != 0) {
-        az_acute_to--;
-        if (az_acute_to == 0) {
-            az_acute_due = 1;
+    if (az_dead_to != 0) {
+        az_dead_to--;
+        if (az_dead_to == 0) {
+            az_dead_due = 1;
         }
     }
 }
 
 void aula_layout_task(void)
 {
-    if (az_acute_due) {
-        az_acute_due = 0;
-        if (az_acute) {
-            az_acute = 0;
-            az_push(0x21u, 0); /* l'apostrophe part seule */
+    if (az_dead_due) {
+        az_dead_due = 0;
+        if (az_dead != 0) {
+            /* Le symbole seul : `'` pour l'aigu, `"` pour le tréma. */
+            az_push(az_dead == AZ_DIA ? 0x20u : 0x21u, 0);
+            az_dead = 0;
         }
     }
 

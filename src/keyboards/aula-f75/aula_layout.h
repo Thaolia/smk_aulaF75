@@ -12,10 +12,13 @@
  * `&`. Ce mode fait porter la traduction par le CLAVIER : on frappe ce qui est
  * écrit sur les capuchons, et le bon caractère sort, sans rien changer côté PC.
  *
- * Quatre des cinq touches mortes US International ont un équivalent mort côté
- * fr-FR (`^`, `¨`, `` ` ``, `~`) : le clavier émet la touche morte de l'hôte et
- * c'est l'hôte qui compose. Seul l'accent aigu demande une machine à états --
- * le fr-FR n'en a pas, `é` y est une touche à part entière.
+ * Trois des cinq touches mortes US International passent par celle de l'hôte
+ * (`^`, `` ` ``, `~`) : le clavier l'émet et c'est l'hôte qui compose.
+ *
+ * Deux demandent une machine à états. L'accent aigu parce que le fr-FR n'en a
+ * pas -- `é` y est une touche à part entière. Le TRÉMA parce que l'hôte en a une,
+ * mais que son symbole seul est `¨` et non `"` : mesuré sur l'appareil, c'est la
+ * seule des quatre dont le caractère nu diffère de celui d'US International.
  *
  * Le découpage tick/task est le même que pour `aula_encoder.c` et
  * `aula_macro.c`, et pour la même raison : `send_keyboard_report()` traverse la
