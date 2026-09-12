@@ -546,10 +546,11 @@ static bool rf_send_status_probe(void)
  * l'emplacement EST l'octet de commande, 2 ou 3, et décide de la longueur.
  * Ici la file de SMK suffit : on émet directement.
  *
- * INFÉRÉ : la disposition des octets de charge. Ce qui est établi, c'est la
- * taille (27 et 10 octets utiles) et le fait que la file est alimentée par les
- * MÊMES drapeaux que la chaîne USB — donc que le contenu est celui des rapports
- * HID. Le placement à l'offset 0 est le choix le plus naturel, pas une lecture.
+ * RELEVÉ, plus inféré : les deux émetteurs d'usine (`0x46C2` et `0x4730`)
+ * recopient l'emplacement tel quel derrière l'en-tête `0x01`, l'octet 0 de
+ * l'emplacement servant de commande. La charge utile, elle, ne porte PAS le
+ * Report ID HID -- voir `rf_send_extra()` plus bas, et la section « La trame
+ * courte » de `docs/keyboards/aula-f75.md`.
  */
 /* Range un rapport dans la file ; l'octet 0 de l'emplacement est la commande. */
 static void rf_queue_report(uint8_t cmd, const __xdata uint8_t *data, uint8_t len)
@@ -608,9 +609,49 @@ void rf_send_nkro(__xdata report_nkro_t *report)
     rf_queue_report(RF_CMD_REPORT_L, report->raw, NKRO_REPORT_SIZE);
 }
 
+/*
+ * La charge utile de la trame courte, RELEVÉE au désassembleur en `0x45AB` --
+ * ce n'est plus une inférence :
+ *
+ *   [0..1]  usage Consumer, seize bits, poids faible d'abord  (0x09BD, 0x09BE)
+ *   [2]     octet System                                      (0x097E)
+ *   [3..9]  rapport souris, sept octets                       (0x09B1)
+ *
+ * Le Report ID HID n'y est PAS. Le tampon Consumer d'usine commence pourtant
+ * par lui -- `0x09BC` porte le Report ID 2 -- et le producteur radio le SAUTE
+ * délibérément : c'est l'octet de commande de la trame qui tient lieu de
+ * sélecteur, pas le Report ID. Envoyer `report->raw` tel quel décalait donc
+ * tout d'un octet, et le dongle lisait `2` comme poids faible de l'usage.
+ * C'est ce qui rendait la molette et les touches multimédia muettes en
+ * 2,4 GHz et en Bluetooth, alors que la frappe passait.
+ *
+ * L'octet System est INFÉRÉ : sa position est établie, mais aucun keycode
+ * System n'est câblé dans cette disposition, donc rien ne l'a exercé.
+ */
+#define RF_EXTRA_PAY 3
+
+/* En XDATA et non sur la pile : `rf_queue_report()` prend un `__xdata *`, et
+ * sous `--stack-auto` un tableau local vit en RAM interne. */
+static __xdata uint8_t extra_pay[RF_EXTRA_PAY];
+
 void rf_send_extra(__xdata report_extra_t *report)
 {
-    rf_queue_report(RF_CMD_REPORT_S, report->raw, EXTRA_REPORT_SIZE);
+    extra_pay[0] = 0;
+    extra_pay[1] = 0;
+    extra_pay[2] = 0;
+
+    if (report->report_id == REPORT_ID_CONSUMER) {
+        extra_pay[0] = (uint8_t)(report->usage & 0xFFu);
+        extra_pay[1] = (uint8_t)(report->usage >> 8);
+    } else if (report->report_id == REPORT_ID_SYSTEM) {
+        extra_pay[2] = (uint8_t)(report->usage & 0xFFu);
+    } else {
+        return; /* rien d'autre ne passe par cette trame */
+    }
+
+    /* Les sept octets de souris restent nuls : `rf_queue_report()` efface
+     * l'emplacement, et ce clavier n'a pas de souris. */
+    rf_queue_report(RF_CMD_REPORT_S, extra_pay, RF_EXTRA_PAY);
 }
 
 /* ---------------------------------------------------------------- réception */

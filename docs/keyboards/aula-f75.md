@@ -289,6 +289,76 @@ ici même.
 
 
 
+## La trame courte — le Report ID était l'octet de trop
+
+**Symptôme :** en 2,4 GHz et en Bluetooth, la molette et les touches multimédia ne faisaient rien,
+alors que la frappe passait. Les deux empruntent pourtant la même file et le même émetteur.
+
+Cette page annonçait la disposition de la charge utile comme **inférée** — « le placement à
+l'offset 0 est le choix le plus naturel, pas une lecture ». Elle l'est maintenant.
+
+### La trame, relevée au désassembleur
+
+`euart0_send` est en **`0xAB0F`**, longueur dans `r5`, étiquette dans `r7`. Cinq appelants, et
+leurs longueurs identifient chacun :
+
+| Site | `r5` | Commande |
+| --- | --- | --- |
+| `0x46C2` | 30 | `0x02` — rapport long |
+| `0x4730` | 13 | `0x03` — rapport court |
+| `0xA376` | 32 | `0x09` — nom Bluetooth |
+| `0xB0B8` | 23 | `0x08` — conteneur |
+| `0xED53` | 6 | commandes courtes |
+
+Les deux émetteurs de rapport font **exactement la même chose**, à la longueur près :
+
+```asm
+mov r0, #0x33 ; mov @r0, #0x01      ; trame[0] = en-tete 0x01
+src = 0x0C57 + idx * 0x1C           ; l'emplacement de file, 28 octets
+inc r0                              ; destination = IDATA 0x34
+memcpy(dst, src, 0x1C ou 0x0B)      ; 28 octets (long) ou 11 (court)
+euart0_send(0x1E ou 0x0D, 6)
+```
+
+L'octet 0 de l'emplacement EST la commande, recopié tel quel en trame[1]. **Notre
+`rf_queue_flush()` construisait déjà cette trame octet pour octet.** Le défaut était ailleurs.
+
+### Le producteur, et l'octet sauté
+
+Le producteur de la trame courte est en **`0x45AB`** :
+
+```asm
+slot[0] = 0x03
+slot[1] = [0x09BD]                  ; usage Consumer, poids faible
+slot[2] = [0x09BE]                  ; usage Consumer, poids fort
+slot[3] = [0x097E]                  ; octet System
+slot[4..10] = memcpy(0x09B1, 7)     ; rapport souris
+```
+
+Le tampon Consumer d'usine est `0x09BC`, et **`0x09BC` porte le Report ID 2** — cette page
+l'établissait déjà par deux chemins indépendants. Le producteur radio commence à `0x09BD` : il
+**saute le Report ID**. C'est l'octet de commande de la trame qui tient lieu de sélecteur.
+
+Le producteur du rapport long confirme la règle (`0x451A`) : `slot[1] = [0x08B2]`, le masque de
+modificateurs, puis cinq touches depuis `0x08B4`. Pas de Report ID non plus.
+
+**Notre code envoyait `report->raw`**, c'est-à-dire `[Report ID, usage_lo, usage_hi]`. Tout était
+décalé d'un octet et le dongle lisait `2` comme poids faible de l'usage. Le rapport clavier, lui,
+n'a jamais eu de Report ID en 6KRO — d'où une frappe qui marchait et un volume qui ne marchait pas.
+
+> **Leçon de méthode.** Les deux chemins étaient symétriques dans notre code et le raisonnement
+> statique n'a pas départagé : le rapport clavier *et* le rapport Consumer commençaient « au plus
+> naturel ». Seule la dissymétrie du dump — l'un commence à `0x08B2`, l'autre à `0x09BD` et pas
+> `0x09BC` — donnait la réponse. Une inférence marquée comme telle a fini par coûter un bug ; elle
+> a au moins été trouvée là où la page disait de chercher.
+
+### Ce qui reste inféré
+
+La **position** de l'octet System (`slot[3]`) est établie, mais aucun keycode System n'est câblé
+dans cette disposition : rien ne l'a exercé. Les sept octets de souris restent nuls — ce clavier
+n'a pas de souris.
+
+
 ## Compensation AZERTY — création, et les deux portes qui manquaient au coeur SMK
 
 `Fn + Ctrl gauche` (`LAYOUT_AZ`) fait traduire chaque frappe par le clavier : les capuchons portent
