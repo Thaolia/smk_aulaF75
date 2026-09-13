@@ -36,13 +36,29 @@ void stack_task(void)
 {
     static uint8_t reported = 0;
     static uint8_t throttle = 0;
+    static uint8_t period   = 0;
 
     if (++throttle != 0) {
         return; // ~once every 256 main-loop iterations
     }
 
     uint8_t peak = stack_peak();
-    if (peak > reported) {
+
+    /*
+     * Repeter periodiquement, pas seulement sur un nouveau maximum.
+     *
+     * Le pic est atteint dans les toutes premieres millisecondes -- l'interruption USB
+     * tire sur chaque SOF, toutes les 1 ms (_SOFIA dans USBIE1) -- donc l'unique message
+     * « nouveau maximum » part bien avant qu'un hote ait pu s'attacher a la console. Le
+     * tampon de console.c fait 128 octets et jette quand il est plein : la ligne etait
+     * donc systematiquement perdue, et le chiffre inaccessible depuis l'hote. Mesure du
+     * 2026-09-13 : 130 s d'ecoute, aucun STACK peak.
+     *
+     * ++period deborde tous les 256 declenchements du throttle, soit ~65 536 tours de
+     * boucle : de l'ordre de 30 s. Le pic etant un watermark, il ne decroit jamais, donc
+     * reaffecter `reported` ici ne peut pas creer un faux « nouveau maximum ».
+     */
+    if (peak > reported || ++period == 0) {
         reported = peak;
         dprintf("STACK peak: %02x\r\n", peak);
     }
