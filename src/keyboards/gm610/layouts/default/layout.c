@@ -51,16 +51,21 @@
  * ── Le pavé fléché ──────────────────────────────────────────────────────────
  *
  * Ce clavier n'a AUCUNE flèche, et la table d'usine n'en contient nulle part --
- * vérifié sur les 126 enregistrements. Placement repris de la sérigraphie :
+ * vérifié sur ses 126 enregistrements.
  *
- *                       /
- *                       ↑
- *          AltGr      Menu      Ctrl
- *            ←          ↓         →
+ *   Menu            ↓        la SEULE touche dont la couche de base change
+ *   Fn + Menu       ↑
+ *   Fn + AltGr      ←
+ *   Fn + Ctrl dr.   →
+ *   Fn + J          Origine   J et M sont tous deux en colonne 7,
+ *   Fn + M          Fin       l'un au-dessus de l'autre
  *
- * Et Fn + Maj gauche + ↑/↓ donne PgPréc / PgSuiv -- avec le Maj RETIRÉ du
- * rapport, sinon l'hôte lirait « sélectionner une page » au lieu de « tourner
- * une page ». Voir kb.c.
+ * ⚠️ La touche Menu perd sa fonction d'origine : il n'y a plus de KC_APP sur ce
+ * clavier. C'est un choix assumé -- la flèche bas sert bien plus souvent.
+ *
+ * Et Maj + ↑/↓ donne PgPréc / PgSuiv, avec le Maj RETIRÉ du rapport (voir kb.c).
+ * ⚠️ La flèche bas étant sur la couche de BASE, `Maj + Menu` seul suffit donc
+ * pour PgSuiv, sans Fn -- asymétrie assumée, conséquence directe de l'inversion.
  *
  * ── Deux manques du 60 % ────────────────────────────────────────────────────
  *
@@ -87,14 +92,14 @@ const uint16_t keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         {KC_TAB,  KC_Q,    KC_W,    KC_E,    KC_R,    KC_T,    KC_Y,    KC_U,    KC_I,    KC_O,    KC_P,    KC_LBRC, KC_RBRC, KC_BSLS},
         {KC_CAPS, KC_A,    KC_S,    KC_D,    KC_F,    KC_G,    KC_H,    KC_J,    KC_K,    KC_L,    KC_SCLN, KC_QUOT, KC_NUHS, KC_ENT },
         {KC_LSFT, KC_Z,    KC_X,    KC_C,    KC_V,    KC_B,    KC_N,    KC_M,    KC_COMM, KC_DOT,  KC_SLSH, KC_INT1, KC_NO,   KC_RSFT},
-        {KC_LCTL, KC_LGUI, KC_LALT, KC_NO,   KC_NO,   KC_SPC,  KC_NO,   KC_NO,   KC_RALT, KC_APP,  KC_NO,   KC_NO,   KC_RCTL, MO(_FL)},
+        {KC_LCTL, KC_LGUI, KC_LALT, KC_NO,   KC_NO,   KC_SPC,  KC_NO,   KC_NO,   KC_RALT, KC_DOWN, KC_NO,   KC_NO,   KC_RCTL, MO(_FL)},
     },
     [_FL] = {
         {KC_GRV,  KC_F1,   KC_F2,   KC_F3,   KC_F4,   KC_F5,   KC_F6,   KC_F7,   KC_F8,   KC_F9,   KC_F10,  KC_F11,  KC_F12,  KC_DEL },
         {LNK_TOGGLE,LNK_BT1,LNK_BT2,LNK_BT3,_______, _______, _______, KC_PSCR, _______, _______, _______, SPD_DN,  SPD_UP,  FX_NEXT},
-        {_______, _______, _______, RGB_DIAG,_______, LNK_24G, _______, _______, _______, _______, BRI_DN,  BRI_UP,  _______, _______},
-        {_______, _______, _______, _______, _______, KB_BOOT, _______, _______, _______, _______, KC_UP,   _______, _______, _______},
-        {LAYOUT_AZ,_______, _______, _______, _______, _______, _______, _______, KC_LEFT, KC_DOWN, _______, _______, KC_RGHT, _______},
+        {_______, _______, _______, RGB_DIAG,_______, LNK_24G, _______, KC_HOME, _______, _______, BRI_DN,  BRI_UP,  _______, _______},
+        {_______, _______, _______, _______, _______, KB_BOOT, _______, KC_END,  _______, _______, _______, _______, _______, _______},
+        {LAYOUT_AZ,_______, _______, _______, _______, _______, _______, _______, KC_LEFT, KC_UP,   _______, _______, KC_RGHT, _______},
     },
 };
 
