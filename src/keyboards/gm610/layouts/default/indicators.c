@@ -8,6 +8,7 @@
 #include "user_matrix.h"
 #include "debug.h"
 #include "usb.h"
+#include "isp.h"
 #ifdef RF_ENABLED
 #    include "rf_controller.h"
 #endif
@@ -90,6 +91,25 @@
  * ne répondait plus dans l'état où elle sert justement.
  */
 volatile uint8_t indicators_ticks;
+
+/*
+ * ── La sortie vers le bootloader ────────────────────────────────────────────
+ *
+ * Deux raisons de la faire ICI et pas dans `kb_update()` :
+ *
+ * 1. `fx_tick()` tourne dans l'ISR systick. Le saut ne peut donc pas être
+ *    retardé par une boucle principale affamée -- or c'est précisément en
+ *    Bluetooth non connecté, quand la boucle rame, que cette porte doit servir.
+ *
+ * 2. Le clavier ANNONCE son départ : tout rouge pendant une demi-seconde, puis
+ *    noir. Sans ça, sur batterie et sans câble, un saut réussi est indiscernable
+ *    d'un raccourci qui n'a pas répondu -- le clavier s'éteint et c'est tout.
+ */
+#define BOOT_ANNOUNCE_TICKS ((uint8_t)16) // ~0,5 s de battements de 30 ms
+
+static uint8_t boot_pending; // 0 = rien ; sinon, battements restants
+
+// `indicators_boot_announce()` est défini plus bas : il touche `render_dirty`.
 
 static uint8_t  boot_limit = BOOT_LIMIT_BRI;
 static uint16_t boot_frames;
@@ -213,6 +233,14 @@ static void diag_announce(void)
             (unsigned)"RGB"[diag_step % 3], (unsigned)(pin >> 4), (unsigned)(pin & 7));
 }
 #define DIAG_HOLD 90 // trames par pas, ~1,5 s
+
+void indicators_boot_announce(void)
+{
+    if (boot_pending == 0) {
+        boot_pending = BOOT_ANNOUNCE_TICKS;
+        render_dirty = true;
+    }
+}
 
 void indicators_toggle_diag(void)
 {
@@ -536,6 +564,13 @@ static void led_regen_one(void)
     uint8_t rgb[3];
     uint8_t r = 0, g = 0, b = 0;
 
+    if (boot_pending) {
+        led_fb[regen_row][0][regen_col] = 255; // tout rouge : « je pars en ISP »
+        led_fb[regen_row][1][regen_col] = 0;
+        led_fb[regen_row][2][regen_col] = 0;
+        goto next;
+    }
+
     if (diag_on) {
         const uint8_t on = (uint8_t)((regen_row == (uint8_t)(diag_step / 3)) ? 255 : 0);
         const uint8_t ci = (uint8_t)(diag_step % 3);
@@ -665,6 +700,11 @@ static void fx_tick(void)
     if (++div4 >= 4) {
         div4 = 0;
         indicators_ticks++;
+
+        if (boot_pending && --boot_pending == 0) {
+            indicators_all_off(); // le bootloader ne connaît pas ces broches
+            isp_jump();           // ne revient jamais
+        }
     }
 
     if (boot_limit != 255) {

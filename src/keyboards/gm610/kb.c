@@ -82,6 +82,7 @@ extern void indicators_speed_down(void);
 extern void indicators_toggle_diag(void);
 extern void indicators_link_flash(void);
 extern void indicators_all_off(void);
+extern void indicators_boot_announce(void);
 
 /*
  * Durée d'un maintien « long » : 100 battements de 30 ms = **3 s**, la
@@ -359,9 +360,14 @@ void kb_update(void)
             hold_done = true;
             switch (hold_keycode) {
                 case KB_BOOT:
-                    // Retour dans le bootloader d'usine. Ne revient jamais.
-                    indicators_all_off();
-                    isp_jump();
+                    /*
+                     * Le saut lui-même se fait dans l'ISR (`fx_tick`), après une
+                     * annonce rouge d'une demi-seconde : ici on ne fait que le
+                     * demander. Sauter depuis la boucle principale marchait en
+                     * USB, mais c'est en Bluetooth non connecté -- quand la
+                     * boucle rame -- que cette porte doit servir.
+                     */
+                    indicators_boot_announce();
                     break;
 #ifdef RF_ENABLED
                 case LNK_TOGGLE:
