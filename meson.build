@@ -48,7 +48,7 @@ parts = [
     #
     # Tout le code radio de la carte reste en place et compile : retablir cette
     # cle suffit a le reprendre. Voir docs/keyboards/gm610.md.
-    ['gm610', 'sh68f90', ['default'], { 'vendor_id': '0x12c9', 'product_id': '0x6001', 'usb_irq_priority': 'high', 'led_rows': '5', 'led_cols': '14', 'led_cx2': '13', 'led_cy2': '4' }],
+    ['gm610', 'sh68f90', ['default'], { 'vendor_id': '0x12c9', 'product_id': '0x6001', 'wireless': 'bk3632', 'usb_irq_priority': 'high', 'led_rows': '5', 'led_cols': '14', 'led_cx2': '13', 'led_cy2': '4' }],
 ]
 
 # SMK
