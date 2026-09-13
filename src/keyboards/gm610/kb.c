@@ -364,10 +364,7 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
 /*
  * ⛔ NE PAS SERVIR LA RADIO PENDANT UNE ÉNUMÉRATION USB.
  *
- * `bb_spi.c` transfère sous `__critical`, interruptions coupées. C'est assez long
- * pour faire rater des paquets à l'interruption USB -- et un GET_DESCRIPTOR de
- * configuration, qui tient en plusieurs paquets, n'y survit pas. Mesuré sur
- * l'appareil le 2026-09-13, en isolant les variables une par une :
+ * Mesuré sur l'appareil le 2026-09-13, en isolant les variables une par une :
  *
  *     sans radio compilée .................... énumère
  *     radio compilée + rf_init(), mode USB ... énumère
@@ -376,7 +373,23 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
  * L'hôte rendait `error -71` (EPROTO) et `-32` (EPIPE), jamais `over-current` :
  * la signature d'un transfert interrompu, pas d'une alimentation qui s'effondre.
  *
- * La règle : on ne parle à la radio que lorsque l'USB est configuré -- donc
+ * ⚠️ Le MÉCANISME n'est PAS établi, et une version antérieure de ce commentaire
+ * se trompait. Elle accusait les fenêtres `__critical` de `bb_spi.c` : c'est faux
+ * pour le chemin qui travaille ici. `bb_spi_burst()` ne prend le verrou que sur
+ * `lock = true`, et le seul appelant qui le demande est `bb_spi_recv()`, c'est-à-dire
+ * `rf_fetch_4()` -- quatre octets. Les dix sites d'émission passent tous par
+ * `bb_spi_xfer()`, donc `lock = false` : aucune interruption coupée.
+ *
+ * La piste la mieux étayée, jamais essayée : les priorités d'interruption. SMK
+ * laisse tout au niveau 0 sur cette carte, donc l'ISR USB ne peut pas préempter
+ * l'ISR systick (rendu LED, 2 kHz). Le firmware d'usine fait exactement l'inverse,
+ * routine `0x922C` : Timer2 activé puis épinglé au niveau 0 (`IPH0 = IPL0 = 0`),
+ * USB seul monté au niveau 3 (`IPH1 = IPL1 = 0x01`). Ce n'est pas un changement
+ * d'une ligne pour autant : `utils/check_interrupts.py` suppose explicitement
+ * qu'aucune interruption n'en préempte une autre.
+ *
+ * En attendant, la règle reste empirique : on ne parle à la radio que lorsque l'USB
+ * est configuré -- donc
  * l'énumération terminée -- OU lorsque aucun hôte ne se manifeste depuis
  * assez longtemps, c'est-à-dire sur batterie, où ce budget n'existe pas.
  *
@@ -401,9 +414,9 @@ static bool rf_service_allowed(void)
          * ⚠️ « Énumération finie » ne veut PAS dire « plein régime autorisé ».
          *
          * L'hôte continue d'émettre des transferts de contrôle bien après
-         * l'énumération, et une fenêtre `__critical` trop longue les casse tout
-         * autant -- il réinitialise alors le périphérique, et le cycle
-         * recommence. Or la radio travaille le plus quand la liaison N'EST PAS
+         * l'énumération, et ils échouent de la même façon -- il réinitialise
+         * alors le périphérique, et le cycle recommence. Or la radio travaille
+         * le plus quand la liaison N'EST PAS
          * établie : le superviseur retente en boucle, `bb_spi` enchaîne. C'est
          * exactement l'état où un reflash laisse le clavier, appairage perdu.
          *

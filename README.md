@@ -114,11 +114,15 @@ plus. Aucun de ces outils ne contient d'opcode d'écriture flash.
 
 ### Ce qui reste ouvert
 
-- **Le Bluetooth.** Il fonctionne — appairage, frappe, témoins d'état — mais `bb_spi.c`
-  transfère sous `__critical` et affame l'interruption USB : l'hôte finit par échouer sur
-  `GET_DESCRIPTOR`. Deux gardes successives n'ont pas suffi. Le vrai correctif est de
-  raccourcir chaque fenêtre `__critical` en découpant les transferts, pas d'en réduire le
-  nombre — et ça touche un fichier partagé par toutes les cartes.
+- **Le Bluetooth.** Il fonctionne — appairage, frappe, témoins d'état — mais dès que le
+  superviseur de liaison tourne, l'hôte finit par échouer sur `GET_DESCRIPTOR` (`-71`/`-32`).
+  Deux gardes successives n'ont pas suffi. Le **mécanisme n'est pas établi** : ce README a
+  longtemps accusé les fenêtres `__critical` de `bb_spi.c`, à tort — seul le chemin de
+  réception y passe, sur quatre octets, et les dix sites d'émission ne prennent aucun verrou.
+  La piste la mieux étayée, jamais essayée, est ailleurs : SMK laisse **toutes** les
+  interruptions au niveau 0, donc l'ISR USB ne peut pas préempter le rendu LED, là où le
+  firmware d'usine met l'USB seul au niveau 3 et épingle Timer2 en bas. Détail et réserves
+  dans [docs/keyboards/gm610.md](docs/keyboards/gm610.md).
 - **Le `Maj` gauche** qui ne déclenchait pas l'accord PgPréc/PgSuiv alors que le droit le
   faisait. Contourné en acceptant les deux, **pas expliqué**.
 - Six cases vides de la rangée basse, et le report vendeur 12 (macros) : jamais testés.
