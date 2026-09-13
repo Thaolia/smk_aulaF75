@@ -74,6 +74,7 @@ options sont elles aussi identiques (`A4E063C00F000088`), donc rien à reprogram
 | **Compensation AZERTY**, active par défaut, `Fn + Ctrl gauche` | ✅ |
 | Accent grave, Impr. écran, Origine/Fin, PgPréc/PgSuiv | ✅ |
 | Console de debug HID | ✅ |
+| Énumération **sous le nom d'usine** — `SINO WEALTH` / `Newmen Bluetooth Keyboard SMK` | ✅ |
 | **`Fn + B` → bootloader d'usine, sans USB** | ✅ |
 | Radio `bk3632` — USB / BT ×3 / 2,4 GHz | ⚠️ fonctionne, **désactivée par défaut** |
 

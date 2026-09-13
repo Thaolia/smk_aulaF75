@@ -6,6 +6,7 @@
 #include "debug.h"
 #include "utils.h"
 #include "usbhidreport.h"
+#include "kbdef.h"
 #include "console.h"
 #include "keyboard.h"
 #include "delay.h"
@@ -18,6 +19,20 @@
 
 #ifndef USB_PID
 #    define USB_PID 0xbeef
+#endif
+
+// Chaines d'enumeration : une carte peut les redefinir dans son kbdef.h
+// pour conserver l'identite d'origine de l'appareil.
+#ifndef USB_MANUFACTURER
+#    define USB_MANUFACTURER "contact@carlossless.io"
+#endif
+
+#ifndef USB_PRODUCT
+#    define USB_PRODUCT "SMK Keyboard"
+#endif
+
+#ifndef USB_SERIAL_NUMBER
+#    define USB_SERIAL_NUMBER "0001"
 #endif
 
 #define BCDHID 0x0111 // HID Class Spec Version
@@ -300,9 +315,9 @@ static usb_desc_langid_c usb_langid = {
 };
 
 usb_ascii_string_c usb_strings[] = {
-    [USB_STRING_MANUFACTURER - 1]  = "contact@carlossless.io",
-    [USB_STRING_PRODUCT - 1]       = "SMK Keyboard",
-    [USB_STRING_SERIAL_NUMBER - 1] = "0001",
+    [USB_STRING_MANUFACTURER - 1]  = USB_MANUFACTURER,
+    [USB_STRING_PRODUCT - 1]       = USB_PRODUCT,
+    [USB_STRING_SERIAL_NUMBER - 1] = USB_SERIAL_NUMBER,
 };
 
 usb_descriptor_set_c usb_descriptor_set = {

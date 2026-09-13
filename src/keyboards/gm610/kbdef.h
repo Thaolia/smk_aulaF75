@@ -25,6 +25,22 @@
  * 0xEFFB) n'est écrit par personne -- cf. l'assertion statique de nvm.c.
  */
 
+/*
+ * Identité USB : celle du firmware d'usine, à un suffixe près.
+ *
+ * Relevé dans assets/gm610/gm610_firmware.bin (descripteurs string, UTF-16LE) :
+ *   0x343A  « SINO WEALTH »              -- iManufacturer
+ *   0x3406  « Newmen Bluetooth Keyboard » -- iProduct
+ *   0x3452  « 0001 »                      -- iSerialNumber
+ *
+ * Le VID:PID (12C9:6001, meson.build) était déjà celui d'usine ; ne restaient
+ * que les chaînes. Le suffixe « SMK » sur iProduct est le seul écart, pour
+ * distinguer au premier coup d'œil ce firmware de celui d'origine.
+ */
+#define USB_MANUFACTURER  "SINO WEALTH"
+#define USB_PRODUCT       "Newmen Bluetooth Keyboard SMK"
+#define USB_SERIAL_NUMBER "0001"
+
 #define MATRIX_ROWS 5
 #define MATRIX_COLS 14
 
