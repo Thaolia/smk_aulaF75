@@ -75,6 +75,22 @@
 #define BOOT_LIMIT_BRI    64
 #define BOOT_LIMIT_FRAMES 400 // ~6 s à ~66 trames/s
 
+/*
+ * Battement de référence, pour tout ce qui doit mesurer du TEMPS.
+ *
+ * `fx_tick()` est appelé depuis l'ISR systick : sous-trame LED de 400 µs et scan
+ * matrice de 100 µs alternés, donc 2 000 sous-trames/s, et une trame = 15
+ * sous-trames -> 133 trames/s. On divise par 4 : un battement toutes les 30 ms,
+ * qui tient dans un octet pour trois secondes (100 battements).
+ *
+ * ⚠️ Pourquoi pas la boucle principale : elle N'A PAS de cadence. Mesurée à
+ * ~2 kHz en USB au repos, elle s'effondre en Bluetooth non connecté -- la radio
+ * retente sa liaison et le témoin fait repeindre l'image. Un maintien compté en
+ * tours de boucle devenait alors interminable, et la porte de secours `Fn + B`
+ * ne répondait plus dans l'état où elle sert justement.
+ */
+volatile uint8_t indicators_ticks;
+
 static uint8_t  boot_limit = BOOT_LIMIT_BRI;
 static uint16_t boot_frames;
 
@@ -644,6 +660,13 @@ static void led_react_poll(void)
 
 static void fx_tick(void)
 {
+    static uint8_t div4;
+
+    if (++div4 >= 4) {
+        div4 = 0;
+        indicators_ticks++;
+    }
+
     if (boot_limit != 255) {
         if (usb_is_configured() || ++boot_frames >= BOOT_LIMIT_FRAMES) {
             boot_limit   = 255;
@@ -660,8 +683,13 @@ static void fx_tick(void)
     if (link_flash) {
         link_flash--;
         render_dirty = true;
-    } else if (kb_conn_mode() == KB_CONN_RF && !keyboard_state.connected) {
-        render_dirty = true; // le témoin clignote ou respire : il faut repeindre
+    } else if (kb_conn_mode() == KB_CONN_RF && !keyboard_state.connected && div4 == 0) {
+        /*
+         * Le témoin clignote ou respire, donc il faut repeindre -- mais une fois
+         * sur quatre suffit (~33 Hz, l'œil n'y voit rien) là où chaque trame
+         * régénérait les 70 cases et écrasait la boucle principale.
+         */
+        render_dirty = true;
     }
     // Sinon on laisse la cadence de l'effet décider : repeindre les 70 cases à
     // chaque trame pour une seule touche fixe affamerait la boucle principale.

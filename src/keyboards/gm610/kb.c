@@ -84,13 +84,21 @@ extern void indicators_link_flash(void);
 extern void indicators_all_off(void);
 
 /*
- * Durée d'un maintien « long ». **6 000 tours de boucle principale = 3 s**,
- * mesuré sur l'appareil -- donc cette boucle tourne à environ 2 kHz. C'est
- * exactement la temporisation du firmware d'usine.
+ * Durée d'un maintien « long » : 100 battements de 30 ms = **3 s**, la
+ * temporisation du firmware d'usine.
+ *
+ * ⚠️ Comptée en battements de l'ISR systick, PAS en tours de boucle principale.
+ * La première version comptait 6 000 tours, calibrés à ~2 kHz en USB au repos --
+ * mais la boucle n'a pas de cadence : en Bluetooth non connecté elle s'effondre,
+ * et le maintien devenait interminable. `Fn + Tab` et `Fn + B` ne répondaient
+ * plus, c'est-à-dire que **la porte de secours était muette dans l'état même où
+ * elle sert**. Mesuré sur l'appareil le 2026-09-13.
  */
-#define LNK_HOLD_TICKS 6000u
+#define LNK_HOLD_TICKS ((uint8_t)100)
 
-static uint16_t hold_ticks;
+extern volatile uint8_t indicators_ticks; // 8 bits : lecture atomique sur 8051
+
+static uint8_t  hold_start;
 static uint16_t hold_keycode;
 static bool     hold_done; // le maintien a déjà agi : ne pas répéter
 
@@ -231,7 +239,7 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             // N'agit qu'au maintien : `kb_update()` l'arme. Voir kbdef.h.
             if (key_pressed) {
                 hold_keycode = keycode;
-                hold_ticks   = 0;
+                hold_start   = indicators_ticks;
                 hold_done    = false;
             } else if (hold_keycode == keycode) {
                 hold_keycode = 0;
@@ -246,7 +254,7 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             if (key_pressed) {
                 select_link(keycode_to_rf_mode(keycode));
                 hold_keycode = keycode;
-                hold_ticks   = 0;
+                hold_start   = indicators_ticks;
                 hold_done    = false;
                 dprintf("hold arm bt\r\n");
             } else if (hold_keycode == keycode) {
@@ -259,7 +267,7 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             // Ceux-là n'agissent qu'au maintien : `kb_update()` les arme.
             if (key_pressed) {
                 hold_keycode = keycode;
-                hold_ticks   = 0;
+                hold_start   = indicators_ticks;
                 hold_done    = false;
                 dprintf("hold arm %s\r\n", (keycode == LNK_TOGGLE) ? "tab" : "24g");
             } else if (hold_keycode == keycode) {
@@ -296,20 +304,19 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
  * Le compteur repart à zéro dès que l'USB redevient configuré : un rebranchement
  * rouvre donc une fenêtre de silence, et pas seulement le démarrage.
  */
-#define USB_QUIET_TICKS 6000u // ~3 s : meme cadence que LNK_HOLD_TICKS, mesuree
+#define USB_QUIET_TICKS ((uint8_t)100) // ~3 s, en battements de 30 ms
 #define RF_RATION_MASK  0x07u // hors fenetre de silence : une iteration sur 8
 
 static bool rf_service_allowed(void)
 {
-    static uint16_t quiet = USB_QUIET_TICKS; // muet des le premier tour
-    static bool     was_configured;
-    static uint8_t  ration;
+    static uint8_t quiet_start;         // battement où le silence a commencé
+    static bool    quiet = true;        // muet dès le premier tour
+    static bool    was_configured;
+    static uint8_t ration;
 
-    const bool configured = usb_is_configured();
-
-    if (configured) {
+    if (usb_is_configured()) {
         was_configured = true;
-        quiet          = 0;
+        quiet          = false;
         return true; // énumération finie : EP0 est au repos, la radio peut parler
     }
 
@@ -317,12 +324,17 @@ static bool rf_service_allowed(void)
     // rebranchement imminent. Une nouvelle énumération est probable -> silence.
     if (was_configured) {
         was_configured = false;
-        quiet          = USB_QUIET_TICKS;
+        quiet          = true;
+        quiet_start    = indicators_ticks;
     }
 
     if (quiet) {
-        quiet--;
-        return false;
+        // ⚠️ En battements matériels, pas en tours de boucle : la boucle
+        // s'effondre justement quand la radio cherche sa liaison.
+        if ((uint8_t)(indicators_ticks - quiet_start) < USB_QUIET_TICKS) {
+            return false;
+        }
+        quiet = false;
     }
 
     /*
@@ -341,8 +353,8 @@ void kb_update(void)
     conn_restore_once();
 
     if (hold_keycode && !hold_done) {
-        if (hold_ticks < LNK_HOLD_TICKS) {
-            hold_ticks++;
+        if ((uint8_t)(indicators_ticks - hold_start) < LNK_HOLD_TICKS) {
+            // rien : le battement matériel court, la boucle peut ramer
         } else {
             hold_done = true;
             switch (hold_keycode) {
