@@ -193,6 +193,20 @@ static void conn_restore_once(void)
  */
 bool kb_process_record(uint16_t keycode, bool key_pressed)
 {
+    /*
+     * ⚠️ Annuler un maintien dès qu'une AUTRE touche bouge.
+     *
+     * Sans ça, relâcher Fn avant la touche maintenue arme une bombe à retardement :
+     * la couche retombe, donc le relâchement de B remonte en `KC_B` et non en
+     * `KB_BOOT`, le compteur n'est jamais remis à zéro, et le saut vers le
+     * bootloader part trois secondes plus tard alors que l'utilisateur a lâché.
+     * Le même piège vaut pour les sélecteurs de liaison.
+     */
+    if (hold_keycode && keycode != hold_keycode) {
+        hold_keycode = 0;
+        hold_done    = true;
+    }
+
     switch (keycode) {
         case FX_NEXT:
             if (key_pressed) indicators_next_effect();
