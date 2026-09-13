@@ -184,8 +184,34 @@ static __code const uint8_t beat_lut[BEAT_SIZE] = {
  * trame, sa teinte glissant avec la distance, jusqu'à quitter le clavier.
  */
 #define LAKE_DROPS    4
-#define LAKE_HUE_STEP 6
-#define LAKE_BASE_B   18 // le lac au repos : un bleu sombre
+
+/*
+ * La teinte glisse avec la distance. 15 par cran d'âge sur 17 crans font
+ * 255 -- le TOUR COMPLET du cercle chromatique sur la vie d'une onde. La
+ * première version montait de 6, soit 40 % du cercle : les couronnes
+ * paraissaient monochromes, relevé sur l'appareil.
+ */
+#define LAKE_HUE_STEP 15
+
+/*
+ * Le lac au repos : un violet qui respire, fondu complet en ~3 s.
+ *
+ * 100 battements de 30 ms font 3 s ; le triangle monte sur 50 et redescend sur
+ * 50, donc l'aller-retour tient dans les 3 s demandées. Il glisse entre un
+ * indigo et un magenta, en gardant le vert à zéro -- c'est ce qui rend la
+ * couleur violette quel que soit le point du fondu.
+ *
+ * Calculé UNE FOIS par trame dans `fx_tick()`, pas par case : les 70 cases de
+ * l'image liraient sinon la même chose soixante-dix fois.
+ */
+#define LAKE_FADE_TICKS 100 // ~3 s
+#define LAKE_R_LO       12
+#define LAKE_R_HI       38
+#define LAKE_B_LO       22
+#define LAKE_B_HI       48
+
+static uint8_t lake_base_r = LAKE_R_LO;
+static uint8_t lake_base_b = LAKE_B_HI;
 
 static __xdata uint8_t drop_col[LAKE_DROPS];
 static __xdata uint8_t drop_row[LAKE_DROPS];
@@ -667,7 +693,8 @@ static void led_regen_one(void)
             break;
         }
         case GM_FX_LAKE: {
-            b = LAKE_BASE_B; // le lac plat
+            r = lake_base_r; // le lac au repos : violet en fondu
+            b = lake_base_b;
             for (uint8_t i = 0; i < LAKE_DROPS; i++) {
                 if (drop_age[i] == 0) {
                     continue;
@@ -815,6 +842,39 @@ static void fx_tick(void)
     // Sinon on laisse la cadence de l'effet décider : repeindre les 70 cases à
     // chaque trame pour une seule touche fixe affamerait la boucle principale.
 #endif
+
+    /*
+     * Le fondu du lac, cadencé sur le battement matériel et non sur la vitesse
+     * de l'effet : l'utilisateur a demandé TROIS SECONDES, pas « trois secondes
+     * si la vitesse est au réglage d'usine ».
+     */
+    {
+        static uint8_t fade;
+        static uint8_t fade_last; // dernier battement vu
+        uint8_t        k;         // 0..255, position dans le fondu
+
+        /*
+         * ⚠️ Avancer sur le BATTEMENT (30 ms), pas sur la trame (7,5 ms).
+         * `fx_tick()` est appelé à chaque trame : y incrémenter directement
+         * donnerait 100 trames = 0,75 s, pas les 3 s demandées.
+         */
+        if (indicators_ticks != fade_last) {
+            fade_last = indicators_ticks;
+            if (++fade >= LAKE_FADE_TICKS) {
+                fade = 0;
+            }
+        }
+        k = (fade < (LAKE_FADE_TICKS / 2))
+                ? (uint8_t)((uint16_t)fade * 255u / (LAKE_FADE_TICKS / 2))
+                : (uint8_t)((uint16_t)(LAKE_FADE_TICKS - fade) * 255u / (LAKE_FADE_TICKS / 2));
+
+        lake_base_r = (uint8_t)(LAKE_R_LO + (((uint16_t)(LAKE_R_HI - LAKE_R_LO) * k) >> 8));
+        lake_base_b = (uint8_t)(LAKE_B_HI - (((uint16_t)(LAKE_B_HI - LAKE_B_LO) * k) >> 8));
+
+        if (user_settings.led_effect == GM_FX_LAKE) {
+            render_dirty = true; // le fond bouge : il faut repeindre
+        }
+    }
 
     if (diag_on) {
         if (++diag_ticks >= DIAG_HOLD) {
