@@ -35,7 +35,7 @@ You can very easily end up with a bricked device if the written firmware can't j
 | E-YOOSO Z11 | SH68F90A / BYK901 | ✅ | ✅ | N/A | [Details](docs/keyboards/eyooso-z11.md) |
 | Genesis Thor 300 | SH68F881 / BYK801 | ✅ | ✅ | N/A | [Details](docs/keyboards/genesis-thor-300.md) |
 | Epomaker × AULA F75 | SH68F90A / BYK916 | ✅ | ✅ | 2.4G + BT | [Details](docs/keyboards/aula-f75.md) |
-| Newmen GM610 | SH68F90 | ✅ | ✅ | 2.4G + BT *(WIP)* | [Details](docs/keyboards/gm610.md) |
+| Newmen GM610 | SH68F90 | ✅ | ✅ | 2.4G + BT | [Details](docs/keyboards/gm610.md) |
 
 Platform notes: [SH68F90 / SH68F90A](docs/platforms/sh68f90.md), [SH68F881](docs/platforms/sh68f881.md).
 
@@ -70,18 +70,91 @@ options sont elles aussi identiques (`A4E063C00F000088`), donc rien à reprogram
 | --- | --- |
 | Matrice 5 × 14 | ✅ |
 | RGB par touche — **battement** (lub-dub) et **goutte d'eau sur le lac** | ✅ |
-| Pavé fléché inversé — `AltGr`/`Menu`/`Ctrl droit` = `← ↓ →` sans `Fn` | ✅ |
-| **Compensation AZERTY**, active par défaut, `Fn + Ctrl gauche` | ✅ |
-| Accent grave, Impr. écran, Origine/Fin, PgPréc/PgSuiv | ✅ |
+| Pavé fléché inversé — `AltGr` / `Menu` / `Ctrl droit` = `←` `↓` `→` sans `Fn` | ✅ |
+| **Compensation AZERTY**, active par défaut, annoncée 5 s au démarrage | ✅ |
+| Accent grave, Impr. écran, Origine / Fin, PgPréc / PgSuiv | ✅ |
 | Console de debug HID | ✅ |
-| Énumération **sous le nom d'usine** — `SINO WEALTH` / `Newmen Bluetooth Keyboard SMK` | ✅ |
+| Énumération **sous le nom d'usine**, au suffixe près | ✅ |
 | **`Fn + B` → bootloader d'usine, sans USB** | ✅ |
-| Radio `bk3632` — USB / BT ×3 / 2,4 GHz | ✅ **activée par défaut** |
+| Radio `bk3632` — USB / BT ×3 / 2,4 GHz | ✅ activée par défaut |
+
+Pas de touches multimédia : choix explicite du propriétaire, pas un manque.
+
+### La couche `Fn`
+
+| | |
+| --- | --- |
+| `` ` `` · `F1`–`F12` · `Suppr` | rangée des chiffres |
+| `Tab` | bascule USB ↔ sans-fil *(maintenir ~3 s)* |
+| `Q` `W` `E` | Bluetooth 1 / 2 / 3 *(maintenir ~3 s)* |
+| `G` | 2,4 GHz *(maintenir ~3 s)* |
+| `B` | **bootloader d'usine** *(maintenir ~3 s)* |
+| `Ctrl gauche` | bascule la compensation AZERTY |
+| `U` | Impr. écran |
+| `J` · `M` | Origine · Fin |
+| `Menu` | `↑` — et `Fn` + `Maj` + `↑`/`↓` = PgPréc / PgSuiv |
+| `AltGr` · `Ctrl droit` | rendent leur fonction d'origine |
+| `[` `]` · `;` `'` | vitesse − / + · luminosité − / + |
+| `\` | effet suivant |
+| `D` | diagnostic RGB sur la console |
+
+### Budget
 
 ```
-Flash    28 Ko / 60 Ko     47 %      XRAM    1,2 Ko / 4 Ko     30 %
-(sans la radio : 22 Ko, 37 %)
+Flash    28 Ko / 60 Ko     47 %      (sans la radio : 22 Ko, 37 %)
+XRAM    1,2 Ko /  4 Ko     30 %
+Pile     150 o  /  222 o   68 %      pire cas mesuré, radio + priorité USB
 ```
+
+### La priorité d'interruption USB — le point technique de la branche
+
+L'hôte échouait sur `GET_DESCRIPTOR` (`-71` / `-32`) dès que le superviseur de liaison
+tournait. Ce README a longtemps accusé les fenêtres `__critical` de `bb_spi.c` : **c'était
+faux.** `bb_spi_burst()` ne prend le verrou que sur `lock = true`, et le seul appelant qui
+le demande est le chemin de réception, sur quatre octets ; les dix sites d'émission n'en
+prennent aucun. Le correctif recommandé désignait quelque chose qui n'existe pratiquement
+pas.
+
+La vraie piste venait du firmware d'usine. Sa routine `0x922C` active Timer2, **l'épingle au
+niveau 0**, puis monte l'**USB seul au niveau 3** — alors que SMK laissait toutes les
+interruptions au niveau 0, si bien que l'ISR USB ne pouvait pas préempter l'ISR systick
+(rendu LED, 2 kHz). Or `USBIE1` contient `_SOFIA` : l'USB tire sur chaque SOF, toutes les
+1 ms.
+
+C'est l'option par carte `usb_irq_priority: 'high'`, qui pose **ensemble** la macro et le
+drapeau du vérificateur — les séparer rendrait l'imbrication d'ISR invisible au contrôle.
+Coût : **+6 octets**, et les autres cartes restent identiques octet pour octet.
+
+Éprouvé : **300 s, 0 perte d'énumération**, à travers une montée de liaison Bluetooth, un
+maintien `Fn + B` et une bascule `Fn + Tab` vers l'USB. Pile mesurée 98 → 122 → 150 o
+(sur 222) selon priorité et radio.
+
+⚠️ Ce que ce relevé ne prouve pas : deux choses ont changé à la fois (la garde de
+rationnement v2, jamais éprouvée, **et** la priorité) et le propriétaire a choisi de garder
+les deux sans les départager ; l'état le plus défavorable — liaison non appairée, superviseur
+qui cherche — n'a pas été tenu longtemps.
+
+### Ce que ce portage a corrigé dans le code partagé
+
+| | |
+| --- | --- |
+| `utils/check_interrupts.py` | **l'interruption 0 n'était pas vérifiée.** La table s'ouvre sur le reset, dont le `ljmp` fait 3 octets sans bourrage ; l'indexer par `offset // 8` donnait au reset et à l'interruption 0 la même clé, l'interruption écrasait le reset, puis le filtre la supprimait. Sur le gm610 c'est le systick : **39 fonctions**, rendu LED et matrice, jamais confrontées à la boucle principale |
+| *idem* | son contrôle de recouvrement est **vide de sens sous `--stack-auto`** — locaux sur la pile, `OSEG` vide, 0 créneau sur les 8 cartes. La ligne de succès l'affiche désormais au lieu de laisser lire une garantie |
+| *idem* | nouvelle classe de collision ISR ↔ ISR pour l'imbrication (`--high-priority-vector`) |
+| `src/smk/usb.c` | les trois chaînes `STRING` étaient codées en dur, les mêmes pour toutes les cartes. Ce sont des macros à valeur par défaut, redéfinissables dans le `kbdef.h` d'une carte |
+| `src/platform/*/stack.c` | le pic de pile n'était imprimé que sur un nouveau maximum, donc **avant qu'un hôte puisse s'attacher** — et perdu dans un tampon console de 128 o. Il est désormais répété périodiquement |
+| `src/platform/sh68f90/sh68f90.h` | tables de bits `IPH0` / `IPL0` / `IPH1` / `IPL1`, absentes |
+
+Les deux premiers sortent d'un **contrôle négatif** : une fonction rendue délibérément
+atteignable depuis deux ISR pour voir le vérificateur échouer. Il a continué de passer.
+
+### Identité USB
+
+Le clavier énumère sous son nom d'origine, à un suffixe près — `12C9:6001`,
+`SINO WEALTH` / **`Newmen Bluetooth Keyboard SMK`**, numéro de série `0001`. Les chaînes
+d'usine viennent des descripteurs `STRING` de l'image extraite ; le VID:PID était déjà celui
+d'usine, c'est ce qui permet à l'updater OEM de reconnaître la carte. Le suffixe est le seul
+écart volontaire, faute de quoi rien ne distinguerait ce firmware de l'original.
 
 ### ⛔ La porte de secours, et pourquoi elle est obligatoire
 
@@ -113,32 +186,43 @@ Sous Linux, `utils/gm610_enter_isp.py` (hidapi) et `utils/gm610_enter_isp_usb.py
 font basculer le clavier en ISP ; `utils/gm610_linux_rescue.sh` aide quand l'hôte n'énumère
 plus. Aucun de ces outils ne contient d'opcode d'écriture flash.
 
+Si après un flash l'hôte ne voit que `0603:1020` — le bootloader — **débrancher et
+rebrancher** suffit. Ne pas confondre avec un échec d'armement : `0xEFFB` vaut `FF` dans
+**tous** les `.hex` SMK, y compris ceux des cartes qui démarrent ; c'est le flasheur qui
+arme, jamais l'image.
+
 ### Ce qui reste ouvert
 
-- **Le Bluetooth — réglé, mais pas expliqué.** L'hôte échouait sur `GET_DESCRIPTOR`
-  (`-71`/`-32`) dès que le superviseur de liaison tournait, et deux gardes n'avaient pas
-  suffi. Ce README a longtemps accusé les fenêtres `__critical` de `bb_spi.c` : **c'était
-  faux**, seul le chemin de réception y passe, sur quatre octets, et les dix sites
-  d'émission ne prennent aucun verrou. La vraie piste venait du firmware d'usine, qui met
-  l'USB **seul au niveau 3** et épingle Timer2 en bas, là où SMK laissait tout au niveau 0 —
-  l'ISR USB ne pouvait donc pas préempter le rendu LED. Implémenté (`usb_irq_priority`) et
-  **éprouvé** : 300 s en Bluetooth puis en USB, aucune perte d'énumération. Deux choses ont
-  toutefois changé à la fois (garde v2 + priorité) et l'état le plus défavorable — liaison
-  non appairée, superviseur qui cherche — n'a pas été tenu longtemps. Voir
-  [docs/keyboards/gm610.md](docs/keyboards/gm610.md).
-- **Le `Maj` gauche** qui ne déclenchait pas l'accord PgPréc/PgSuiv alors que le droit le
+- **Le Bluetooth tient, mais le mécanisme n'est pas expliqué** — voir les réserves
+  ci-dessus, et [docs/keyboards/gm610.md](docs/keyboards/gm610.md).
+- **Le `Maj` gauche** qui ne déclenchait pas l'accord PgPréc / PgSuiv alors que le droit le
   faisait. Contourné en acceptant les deux, **pas expliqué**.
+- **La souris.** Le matériel sait le faire — le firmware d'usine déclare une collection
+  souris (report `0x0D`, 5 boutons, X/Y 16 bits, molette) et la radio a l'opcode `0x05`.
+  SMK a les keycodes mais aucun chemin de rapport.
 - Six cases vides de la rangée basse, et le report vendeur 12 (macros) : jamais testés.
+- Le tampon console de 128 octets fait perdre du diagnostic de démarrage sur **toutes** les
+  cartes, pas seulement ici.
 
 ### Une mise en garde méthodologique
 
-Ce portage a été fait presque entièrement par reverse, et **le reverse s'est trompé
-quatorze fois** — chaque erreur est consignée dans le document de la carte. Les plus
-coûteuses : conclure à un éclairage par zones sans mesurer, identifier un canal de couleur
-sur une **couleur composée**, et interdire l'unique voie de flash Linux sur la base d'une
-contradiction qui n'existait pas.
+Ce portage a été fait presque entièrement par reverse, et **le reverse s'est trompé à
+répétition** — chaque erreur est consignée là où elle porte, dans le document de la carte ou
+dans le commentaire du code concerné. Les plus coûteuses :
 
-Le désassemblage établit ce que le code *peut* faire. Il ne dit jamais ce qui *tourne*.
+- conclure à un éclairage par zones sans mesurer ;
+- identifier un canal de couleur sur une **couleur composée**, au lieu d'allumer un seul
+  canal à la fois ;
+- interdire l'unique voie de flash Linux sur la base d'une contradiction qui n'existait pas ;
+- annoncer « revenir à l'usine = relancer l'exe OEM », alors que sa charge a la table de
+  touches à zéro ;
+- **inventer le mécanisme d'un symptôme pourtant bien mesuré**, et l'écrire comme « le vrai
+  correctif » dans trois documents ;
+- livrer une vérification qui **passait à vide**, jusqu'à ce qu'un contrôle négatif la mette
+  en défaut.
+
+Le désassemblage établit ce que le code *peut* faire. Il ne dit jamais ce qui *tourne*. Et un
+contrôle qui passe ne dit pas s'il a regardé quelque chose.
 
 ## Developing
 
