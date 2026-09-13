@@ -214,6 +214,8 @@ static void conn_restore_once(void)
  * MÊME code qu'à l'appui, même si le Maj a été lâché entre-temps. Sinon l'hôte
  * garde un PgPréc enfoncé pour toujours.
  */
+#define MOD_EITHER_SHIFT (uint8_t)(MOD_BIT(KC_LSFT) | MOD_BIT(KC_RSFT))
+
 static uint8_t sub_up;   // code réellement envoyé pour ↑, 0 si aucun
 static uint8_t sub_down; // idem pour ↓
 
@@ -231,11 +233,19 @@ static bool arrow_page(uint16_t keycode, bool key_pressed)
     }
 
     if (key_pressed) {
-        if ((get_mods() & MOD_BIT(KC_LSFT)) == 0) {
+        /*
+         * Les DEUX Maj. Le droit est juste au-dessus de `Fn` et des flèches :
+         * c'est l'accord naturel, d'une seule main -- et c'est celui qui a
+         * répondu sur l'appareil quand le gauche ne répondait pas, sans que
+         * j'aie su dire pourquoi. Accepter les deux rend la question sans objet
+         * et couvre les deux mains.
+         */
+        const uint8_t shifts = (uint8_t)(get_mods() & MOD_EITHER_SHIFT);
+        if (shifts == 0) {
             return false; // pas de Maj : la flèche part normalement
         }
         *memo = page;
-        set_mods_mask((uint8_t)~MOD_BIT(KC_LSFT));
+        set_mods_mask((uint8_t)~shifts); // ne masquer que ceux réellement tenus
         add_key(page);
     } else {
         if (*memo == 0) {
