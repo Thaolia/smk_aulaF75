@@ -274,6 +274,68 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
     }
 }
 
+/*
+ * ⛔ NE PAS SERVIR LA RADIO PENDANT UNE ÉNUMÉRATION USB.
+ *
+ * `bb_spi.c` transfère sous `__critical`, interruptions coupées. C'est assez long
+ * pour faire rater des paquets à l'interruption USB -- et un GET_DESCRIPTOR de
+ * configuration, qui tient en plusieurs paquets, n'y survit pas. Mesuré sur
+ * l'appareil le 2026-09-13, en isolant les variables une par une :
+ *
+ *     sans radio compilée .................... énumère
+ *     radio compilée + rf_init(), mode USB ... énumère
+ *     superviseur en marche, mode sans-fil ... ÉCHOUE
+ *
+ * L'hôte rendait `error -71` (EPROTO) et `-32` (EPIPE), jamais `over-current` :
+ * la signature d'un transfert interrompu, pas d'une alimentation qui s'effondre.
+ *
+ * La règle : on ne parle à la radio que lorsque l'USB est configuré -- donc
+ * l'énumération terminée -- OU lorsque aucun hôte ne se manifeste depuis
+ * assez longtemps, c'est-à-dire sur batterie, où ce budget n'existe pas.
+ *
+ * Le compteur repart à zéro dès que l'USB redevient configuré : un rebranchement
+ * rouvre donc une fenêtre de silence, et pas seulement le démarrage.
+ */
+#define USB_QUIET_TICKS 6000u // ~3 s : meme cadence que LNK_HOLD_TICKS, mesuree
+#define RF_RATION_MASK  0x07u // hors fenetre de silence : une iteration sur 8
+
+static bool rf_service_allowed(void)
+{
+    static uint16_t quiet = USB_QUIET_TICKS; // muet des le premier tour
+    static bool     was_configured;
+    static uint8_t  ration;
+
+    const bool configured = usb_is_configured();
+
+    if (configured) {
+        was_configured = true;
+        quiet          = 0;
+        return true; // énumération finie : EP0 est au repos, la radio peut parler
+    }
+
+    // On vient de perdre la configuration : débranchement, reset de bus, ou
+    // rebranchement imminent. Une nouvelle énumération est probable -> silence.
+    if (was_configured) {
+        was_configured = false;
+        quiet          = USB_QUIET_TICKS;
+    }
+
+    if (quiet) {
+        quiet--;
+        return false;
+    }
+
+    /*
+     * Passé ce délai, aucun hôte ne s'est manifesté : on est très probablement
+     * sur batterie, où le budget d'énumération n'existe pas. Mais on ne peut PAS
+     * l'affirmer -- le câble peut être branché à l'instant, et l'énumération
+     * démarrerait pendant que la radio parle. Faute de savoir, on rationne :
+     * une fenêtre sur huit suffit à laisser passer un transfert EP0, et coûte
+     * moins de 4 ms de latence sur la liaison sans-fil, ce qui ne se voit pas.
+     */
+    return (++ration & RF_RATION_MASK) == 0;
+}
+
 void kb_update(void)
 {
     conn_restore_once();
@@ -315,7 +377,7 @@ void kb_update(void)
     }
 
 #ifdef RF_ENABLED
-    if (conn_mode == KB_CONN_RF) {
+    if (conn_mode == KB_CONN_RF && rf_service_allowed()) {
         rf_link_supervisor(&keyboard_state);
         rf_send_pending_flush();
         rf_blanking_tick();
