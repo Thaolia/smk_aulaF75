@@ -133,7 +133,7 @@ static bool    az_shown;    // le mode que l'annonce en cours affiche
 #define AZ_R_ROW 1
 #define AZ_R_COL 4
 #define AZ_U_ROW 1
-#define AZ_U_COL 6
+#define AZ_U_COL 7 // Tab Q W E R T Y **U** -- pas 6, qui est Y
 #define AZ_S_ROW 2
 #define AZ_S_COL 2
 

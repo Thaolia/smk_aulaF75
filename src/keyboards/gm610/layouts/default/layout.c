@@ -91,7 +91,7 @@ const uint16_t keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     },
     [_FL] = {
         {KC_GRV,  KC_F1,   KC_F2,   KC_F3,   KC_F4,   KC_F5,   KC_F6,   KC_F7,   KC_F8,   KC_F9,   KC_F10,  KC_F11,  KC_F12,  KC_DEL },
-        {LNK_TOGGLE,LNK_BT1,LNK_BT2,LNK_BT3,_______, _______, KC_PSCR, _______, _______, _______, _______, SPD_DN,  SPD_UP,  FX_NEXT},
+        {LNK_TOGGLE,LNK_BT1,LNK_BT2,LNK_BT3,_______, _______, _______, KC_PSCR, _______, _______, _______, SPD_DN,  SPD_UP,  FX_NEXT},
         {_______, _______, _______, RGB_DIAG,_______, LNK_24G, _______, _______, _______, _______, BRI_DN,  BRI_UP,  _______, _______},
         {_______, _______, _______, _______, _______, KB_BOOT, _______, _______, _______, _______, KC_UP,   _______, _______, _______},
         {LAYOUT_AZ,_______, _______, _______, _______, _______, _______, _______, KC_LEFT, KC_DOWN, _______, _______, KC_RGHT, _______},
