@@ -76,10 +76,11 @@ options sont elles aussi identiques (`A4E063C00F000088`), donc rien à reprogram
 | Console de debug HID | ✅ |
 | Énumération **sous le nom d'usine** — `SINO WEALTH` / `Newmen Bluetooth Keyboard SMK` | ✅ |
 | **`Fn + B` → bootloader d'usine, sans USB** | ✅ |
-| Radio `bk3632` — USB / BT ×3 / 2,4 GHz | ⚠️ fonctionne, **désactivée par défaut** |
+| Radio `bk3632` — USB / BT ×3 / 2,4 GHz | ✅ **activée par défaut** |
 
 ```
-Flash    22 Ko / 60 Ko     37 %      XRAM    1,2 Ko / 4 Ko     28 %
+Flash    28 Ko / 60 Ko     47 %      XRAM    1,2 Ko / 4 Ko     30 %
+(sans la radio : 22 Ko, 37 %)
 ```
 
 ### ⛔ La porte de secours, et pourquoi elle est obligatoire
@@ -114,16 +115,17 @@ plus. Aucun de ces outils ne contient d'opcode d'écriture flash.
 
 ### Ce qui reste ouvert
 
-- **Le Bluetooth.** Il fonctionne — appairage, frappe, témoins d'état — mais dès que le
-  superviseur de liaison tourne, l'hôte finit par échouer sur `GET_DESCRIPTOR` (`-71`/`-32`).
-  Deux gardes successives n'ont pas suffi. Le **mécanisme n'est pas établi** : ce README a
-  longtemps accusé les fenêtres `__critical` de `bb_spi.c`, à tort — seul le chemin de
-  réception y passe, sur quatre octets, et les dix sites d'émission ne prennent aucun verrou.
-  La piste la mieux étayée est ailleurs : SMK laissait **toutes** les interruptions au
-  niveau 0, donc l'ISR USB ne pouvait pas préempter le rendu LED, là où le firmware d'usine
-  met l'USB seul au niveau 3 et épingle Timer2 en bas. C'est **implémenté** depuis le
-  2026-09-13 (option `usb_irq_priority`), et **à éprouver sur l'appareil**. Détail, coût et
-  réserves dans [docs/keyboards/gm610.md](docs/keyboards/gm610.md).
+- **Le Bluetooth — réglé, mais pas expliqué.** L'hôte échouait sur `GET_DESCRIPTOR`
+  (`-71`/`-32`) dès que le superviseur de liaison tournait, et deux gardes n'avaient pas
+  suffi. Ce README a longtemps accusé les fenêtres `__critical` de `bb_spi.c` : **c'était
+  faux**, seul le chemin de réception y passe, sur quatre octets, et les dix sites
+  d'émission ne prennent aucun verrou. La vraie piste venait du firmware d'usine, qui met
+  l'USB **seul au niveau 3** et épingle Timer2 en bas, là où SMK laissait tout au niveau 0 —
+  l'ISR USB ne pouvait donc pas préempter le rendu LED. Implémenté (`usb_irq_priority`) et
+  **éprouvé** : 300 s en Bluetooth puis en USB, aucune perte d'énumération. Deux choses ont
+  toutefois changé à la fois (garde v2 + priorité) et l'état le plus défavorable — liaison
+  non appairée, superviseur qui cherche — n'a pas été tenu longtemps. Voir
+  [docs/keyboards/gm610.md](docs/keyboards/gm610.md).
 - **Le `Maj` gauche** qui ne déclenchait pas l'accord PgPréc/PgSuiv alors que le droit le
   faisait. Contourné en acceptant les deux, **pas expliqué**.
 - Six cases vides de la rangée basse, et le report vendeur 12 (macros) : jamais testés.
