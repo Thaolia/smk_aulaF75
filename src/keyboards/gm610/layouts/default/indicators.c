@@ -9,6 +9,7 @@
 #include "debug.h"
 #include "usb.h"
 #include "isp.h"
+#include "gm610_layout.h"
 #ifdef RF_ENABLED
 #    include "rf_controller.h"
 #endif
@@ -108,6 +109,33 @@ volatile uint8_t indicators_ticks;
 #define BOOT_ANNOUNCE_TICKS ((uint8_t)16) // ~0,5 s de battements de 30 ms
 
 static uint8_t boot_pending; // 0 = rien ; sinon, battements restants
+
+/*
+ * ── L'annonce de la disposition ─────────────────────────────────────────────
+ *
+ * Le clavier dit dans quel mode il est en éclairant DEUX TOUCHES, clignotantes :
+ *
+ *     F et R, en bleu    -> compensation AZERTY active
+ *     U et S, en blanc   -> disposition US brute
+ *
+ * ~5 s au démarrage, ~1,5 s à chaque bascule. Les lettres portent le sens, la
+ * couleur ne fait que le rendre lisible d'un coup d'œil.
+ */
+#define AZ_ANNOUNCE_BOOT   ((uint8_t)166) // ~5 s en battements de 30 ms
+#define AZ_ANNOUNCE_TOGGLE ((uint8_t)50)  // ~1,5 s
+
+static uint8_t az_announce; // battements restants, 0 = rien
+static bool    az_shown;    // le mode que l'annonce en cours affiche
+
+// Position des quatre lettres sur la couche de base.
+#define AZ_F_ROW 2
+#define AZ_F_COL 4
+#define AZ_R_ROW 1
+#define AZ_R_COL 4
+#define AZ_U_ROW 1
+#define AZ_U_COL 6
+#define AZ_S_ROW 2
+#define AZ_S_COL 2
 
 // `indicators_boot_announce()` est défini plus bas : il touche `render_dirty`.
 
@@ -234,6 +262,13 @@ static void diag_announce(void)
 }
 #define DIAG_HOLD 90 // trames par pas, ~1,5 s
 
+void gm610_layout_announce(bool on, bool demarrage)
+{
+    az_shown     = on;
+    az_announce  = demarrage ? AZ_ANNOUNCE_BOOT : AZ_ANNOUNCE_TOGGLE;
+    render_dirty = true;
+}
+
 void indicators_boot_announce(void)
 {
     if (boot_pending == 0) {
@@ -348,7 +383,12 @@ void indicators_apply_defaults(void)
      */
     user_settings.ul_effect      = KB_CONN_USB;
     user_settings.ul_brightness  = 0;
-    user_settings.ul_speed       = LED_SPEED_DEFAULT;
+    /*
+     * ⚠️ `ul_speed` n'est PAS une vitesse ici : gm610_layout.c s'en sert pour
+     * persister la compensation AZERTY. 1 = ACTIVE, ce qui est le défaut voulu
+     * sur cette carte.
+     */
+    user_settings.ul_speed       = 1;
 }
 
 void indicators_validate_settings(void)
@@ -367,6 +407,13 @@ void indicators_validate_settings(void)
     if (user_settings.led_brightness == 0 && user_settings.led_speed == 0) {
         indicators_apply_defaults();
     }
+
+    /*
+     * ⚠️ ICI et pas dans `kb_init()` : `main.c` appelle `kb_init()` AVANT
+     * `restore_settings()`, il n'y aurait rien à lire. Même piège que pour le
+     * mode de liaison, payé une fois.
+     */
+    gm610_layout_restore(user_settings.ul_speed != 0);
 
     if (user_settings.led_effect > GM_FX_OFF) {
         user_settings.led_effect = GM_FX_OFF;
@@ -571,6 +618,35 @@ static void led_regen_one(void)
         goto next;
     }
 
+    if (az_announce) {
+        /*
+         * Clignotement à ~4 Hz : le bit 3 du battement de 30 ms bascule toutes
+         * les 8 périodes, soit 240 ms allumé / 240 ms éteint.
+         */
+        const bool allume = (indicators_ticks & 0x08) != 0;
+        bool       ici;
+
+        if (az_shown) {
+            ici = (regen_row == AZ_F_ROW && regen_col == AZ_F_COL) ||
+                  (regen_row == AZ_R_ROW && regen_col == AZ_R_COL);
+        } else {
+            ici = (regen_row == AZ_U_ROW && regen_col == AZ_U_COL) ||
+                  (regen_row == AZ_S_ROW && regen_col == AZ_S_COL);
+        }
+
+        if (ici && allume) {
+            // FR en bleu, US en blanc.
+            led_fb[regen_row][0][regen_col] = az_shown ? 0 : 255;
+            led_fb[regen_row][1][regen_col] = az_shown ? 90 : 255;
+            led_fb[regen_row][2][regen_col] = 255;
+        } else {
+            led_fb[regen_row][0][regen_col] = 0;
+            led_fb[regen_row][1][regen_col] = 0;
+            led_fb[regen_row][2][regen_col] = 0;
+        }
+        goto next;
+    }
+
     if (diag_on) {
         const uint8_t on = (uint8_t)((regen_row == (uint8_t)(diag_step / 3)) ? 255 : 0);
         const uint8_t ci = (uint8_t)(diag_step % 3);
@@ -701,6 +777,11 @@ static void fx_tick(void)
         div4 = 0;
         indicators_ticks++;
 
+        if (az_announce) {
+            az_announce--;
+            render_dirty = true; // le clignotement doit repeindre
+        }
+
         if (boot_pending && --boot_pending == 0) {
             indicators_all_off(); // le bootloader ne connaît pas ces broches
             isp_jump();           // ne revient jamais
@@ -789,6 +870,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
     }
 
     led_react_poll();
+    gm610_layout_tick(); // base de temps du module de disposition (~400 µs)
 
     bool wrapped = false;
     if (++led_color >= 3) {

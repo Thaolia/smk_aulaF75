@@ -5,6 +5,7 @@
 #include "settings.h"
 #include "keyboard.h"
 #include "report.h"
+#include "gm610_layout.h"
 #include "isp.h"
 
 #ifdef RF_ENABLED
@@ -302,6 +303,12 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             if (key_pressed) indicators_toggle_diag();
             return false;
 
+        case LAYOUT_AZ:
+            if (key_pressed) {
+                gm610_layout_toggle();
+            }
+            return false;
+
         case KB_BOOT:
             // N'agit qu'au maintien : `kb_update()` l'arme. Voir kbdef.h.
             if (key_pressed) {
@@ -345,7 +352,12 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
 #endif
 
         default:
-            return true;
+            /*
+             * Tout le reste passe par la compensation AZERTY, qui rend `true`
+             * quand elle a pris l'évènement en charge -- il ne doit alors PAS
+             * suivre le chemin normal.
+             */
+            return !gm610_layout_intercept(keycode, key_pressed);
     }
 }
 
@@ -436,6 +448,10 @@ static bool rf_service_allowed(void)
 void kb_update(void)
 {
     conn_restore_once();
+
+    // Vide la file d'émission de la compensation AZERTY. Doit rester dans la
+    // boucle principale : `send_keyboard_report()` est injoignable depuis une ISR.
+    gm610_layout_task();
 
     if (hold_keycode && !hold_done) {
         if ((uint8_t)(indicators_ticks - hold_start) < LNK_HOLD_TICKS) {

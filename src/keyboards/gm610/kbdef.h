@@ -239,5 +239,17 @@ enum custom_keycodes {
      */
     KB_BOOT,
 
+    /*
+     * Fn + Ctrl gauche : bascule la compensation AZERTY.
+     *
+     * Les capuchons portent la disposition US International ; quand l'hôte est
+     * en AZERTY français, les deux se contredisent -- la touche marquée `A`
+     * écrit `q`. Ce mode fait porter la traduction par le CLAVIER : on frappe
+     * ce qui est écrit sur les capuchons, sans rien changer côté PC.
+     *
+     * ACTIF PAR DÉFAUT sur cette carte.
+     */
+    LAYOUT_AZ,
+
     KB_SAFE_RANGE,
 };

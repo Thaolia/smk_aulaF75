@@ -175,7 +175,8 @@ possible_src_keyboard = [
     'aula_encoder.c',
     'aula_macro.c',
     'aula_status.c',
-    'aula_layout.c'
+    'aula_layout.c',
+    'gm610_layout.c'
 ]
 
 possible_src_layout = [
