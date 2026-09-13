@@ -30,6 +30,20 @@ parts = [
     # AULA F75 -- carte SONDE de mise en route : USB et retour ISP, rien d'autre.
     # Aucun GPIO n'est configure ni pilote. Voir src/keyboards/aula-f75-probe/kbdef.h.
     ['aula-f75-probe', 'sh68f90', ['default'], { 'vendor_id': '0x258a', 'product_id': '0x010c', 'led_rows': '6', 'led_cols': '15', 'led_cx2': '14', 'led_cy2': '5' }],
+
+    # Newmen GM610 -- sonde de mise en route : aucun GPIO piloté, bootloader d'usine conservé.
+    # Géométrie 5x14 (la « ligne 0 » du firmware d'usine est la couche Fn, pas une ligne câblée).
+    ['gm610-probe', 'sh68f90', ['default'], { 'vendor_id': '0x12c9', 'product_id': '0x6001', 'led_rows': '5', 'led_cols': '14', 'led_cx2': '13', 'led_cy2': '4' }],
+
+    # Newmen GM610 -- carte reelle : matrice 5x14, RGB par touche, brochage releve sur
+    # le firmware d'usine. Voir docs/keyboards/gm610.md.
+    #
+    # ⛔ 'wireless': 'bk3632' est VOLONTAIREMENT absent. Les six broches correspondent
+    # et le Bluetooth fonctionnait, mais le clavier finissait par echouer sur
+    # GET_DESCRIPTOR(CONFIGURATION) : bb_spi.c transfere sous `__critical`, et un
+    # transfert EP0 multi-paquets n'y survit pas. Le code radio de la carte reste en
+    # place et compile -- retablir la cle quand la cohabitation sera traitee.
+    ['gm610', 'sh68f90', ['default'], { 'vendor_id': '0x12c9', 'product_id': '0x6001', 'led_rows': '5', 'led_cols': '14', 'led_cx2': '13', 'led_cy2': '4' }],
 ]
 
 # SMK
