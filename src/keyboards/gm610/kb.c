@@ -374,7 +374,25 @@ static bool rf_service_allowed(void)
     if (usb_is_configured()) {
         was_configured = true;
         quiet          = false;
-        return true; // énumération finie : EP0 est au repos, la radio peut parler
+
+        /*
+         * ⚠️ « Énumération finie » ne veut PAS dire « plein régime autorisé ».
+         *
+         * L'hôte continue d'émettre des transferts de contrôle bien après
+         * l'énumération, et une fenêtre `__critical` trop longue les casse tout
+         * autant -- il réinitialise alors le périphérique, et le cycle
+         * recommence. Or la radio travaille le plus quand la liaison N'EST PAS
+         * établie : le superviseur retente en boucle, `bb_spi` enchaîne. C'est
+         * exactement l'état où un reflash laisse le clavier, appairage perdu.
+         *
+         * Donc on rationne tant que le lien n'est pas connecté, quel que soit
+         * l'état de l'USB. Une fois connecté, le superviseur ne fait presque
+         * plus rien et la radio peut parler librement.
+         */
+        if (!keyboard_state.connected) {
+            return (++ration & RF_RATION_MASK) == 0;
+        }
+        return true;
     }
 
     // On vient de perdre la configuration : débranchement, reset de bus, ou
