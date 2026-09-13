@@ -4,6 +4,7 @@
 #include "debug.h"
 #include "settings.h"
 #include "keyboard.h"
+#include "report.h"
 #include "isp.h"
 
 #ifdef RF_ENABLED
@@ -200,6 +201,56 @@ static void conn_restore_once(void)
  * Fn + [ / ] la vitesse, Fn + ; / ' la luminosité. Fn + D est en plus -- le
  * balayage de diagnostic des puits, sans équivalent d'usine.
  */
+/*
+ * ── Fn + Maj gauche + ↑/↓ = PgPréc / PgSuiv ─────────────────────────────────
+ *
+ * ⚠️ Le Maj doit être RETIRÉ du rapport. Sans ça l'hôte lit `Maj + PgPréc`,
+ * c'est-à-dire « sélectionner une page » et non « tourner une page » -- le
+ * contraire de ce qu'on demande. `set_mods_mask()` masque le bit dans le
+ * rapport sortant sans toucher à l'état réel du modificateur, donc relâcher le
+ * Maj reste correctement vu.
+ *
+ * Le code substitué est mémorisé par flèche : la touche doit se relâcher sur le
+ * MÊME code qu'à l'appui, même si le Maj a été lâché entre-temps. Sinon l'hôte
+ * garde un PgPréc enfoncé pour toujours.
+ */
+static uint8_t sub_up;   // code réellement envoyé pour ↑, 0 si aucun
+static uint8_t sub_down; // idem pour ↓
+
+static bool arrow_page(uint16_t keycode, bool key_pressed)
+{
+    uint8_t *memo;
+    uint8_t  page;
+
+    if (keycode == KC_UP) {
+        memo = &sub_up;
+        page = KC_PGUP;
+    } else {
+        memo = &sub_down;
+        page = KC_PGDN;
+    }
+
+    if (key_pressed) {
+        if ((get_mods() & MOD_BIT(KC_LSFT)) == 0) {
+            return false; // pas de Maj : la flèche part normalement
+        }
+        *memo = page;
+        set_mods_mask((uint8_t)~MOD_BIT(KC_LSFT));
+        add_key(page);
+    } else {
+        if (*memo == 0) {
+            return false;
+        }
+        del_key(*memo);
+        *memo = 0;
+        if (sub_up == 0 && sub_down == 0) {
+            set_mods_mask(0xFF); // les deux relâchées : le Maj repasse
+        }
+    }
+    send_keyboard_report();
+    return true;
+}
+
 bool kb_process_record(uint16_t keycode, bool key_pressed)
 {
     /*
@@ -217,6 +268,11 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
     }
 
     switch (keycode) {
+        case KC_UP:
+        case KC_DOWN:
+            // Rend `true` seulement s'il a pris la main ; sinon la flèche passe.
+            return !arrow_page(keycode, key_pressed);
+
         case FX_NEXT:
             if (key_pressed) indicators_next_effect();
             return false;

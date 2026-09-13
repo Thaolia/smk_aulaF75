@@ -48,6 +48,28 @@
  * Les maintiens de ~3 s sont ceux du firmware d'usine : ils évitent qu'un
  * effleurement coupe la liaison en pleine frappe.
  *
+ * ── Le pavé fléché ──────────────────────────────────────────────────────────
+ *
+ * Ce clavier n'a AUCUNE flèche, et la table d'usine n'en contient nulle part --
+ * vérifié sur les 126 enregistrements. Placement repris de la sérigraphie :
+ *
+ *                       /
+ *                       ↑
+ *          AltGr      Menu      Ctrl
+ *            ←          ↓         →
+ *
+ * Et Fn + Maj gauche + ↑/↓ donne PgPréc / PgSuiv -- avec le Maj RETIRÉ du
+ * rapport, sinon l'hôte lirait « sélectionner une page » au lieu de « tourner
+ * une page ». Voir kb.c.
+ *
+ * ── Deux manques du 60 % ────────────────────────────────────────────────────
+ *
+ * Fn + Échap = ` et ~. Ce clavier n'a aucune touche accent grave : sa rangée du
+ * haut va d'Échap à Retour arrière sans elle. Le firmware d'usine y remettait
+ * Échap, ce qui ne servait à rien puisque la touche le donne déjà.
+ *
+ * Fn + U = Impr. écran.
+ *
  * ⛔ Fn + B, MAINTENU ~3 s : retour dans le bootloader d'usine.
  *
  * C'est la porte de secours, et elle est obligatoire sur cette carte : elle n'a
@@ -68,11 +90,11 @@ const uint16_t keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         {KC_LCTL, KC_LGUI, KC_LALT, KC_NO,   KC_NO,   KC_SPC,  KC_NO,   KC_NO,   KC_RALT, KC_APP,  KC_NO,   KC_NO,   KC_RCTL, MO(_FL)},
     },
     [_FL] = {
-        {KC_ESC,  KC_F1,   KC_F2,   KC_F3,   KC_F4,   KC_F5,   KC_F6,   KC_F7,   KC_F8,   KC_F9,   KC_F10,  KC_F11,  KC_F12,  KC_DEL },
-        {LNK_TOGGLE,LNK_BT1,LNK_BT2,LNK_BT3,_______, _______, _______, _______, _______, _______, _______, SPD_DN,  SPD_UP,  FX_NEXT},
+        {KC_GRV,  KC_F1,   KC_F2,   KC_F3,   KC_F4,   KC_F5,   KC_F6,   KC_F7,   KC_F8,   KC_F9,   KC_F10,  KC_F11,  KC_F12,  KC_DEL },
+        {LNK_TOGGLE,LNK_BT1,LNK_BT2,LNK_BT3,_______, _______, KC_PSCR, _______, _______, _______, _______, SPD_DN,  SPD_UP,  FX_NEXT},
         {_______, _______, _______, RGB_DIAG,_______, LNK_24G, _______, _______, _______, _______, BRI_DN,  BRI_UP,  _______, _______},
-        {_______, _______, _______, _______, _______, KB_BOOT, _______, _______, _______, _______, _______, _______, _______, _______},
-        {_______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______},
+        {_______, _______, _______, _______, _______, KB_BOOT, _______, _______, _______, _______, KC_UP,   _______, _______, _______},
+        {_______, _______, _______, _______, _______, _______, _______, _______, KC_LEFT, KC_DOWN, _______, _______, KC_RGHT, _______},
     },
 };
 
