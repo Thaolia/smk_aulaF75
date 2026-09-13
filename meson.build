@@ -33,15 +33,22 @@ parts = [
 
     # Newmen GM610 -- sonde de mise en route : aucun GPIO piloté, bootloader d'usine conservé.
     # Géométrie 5x14 (la « ligne 0 » du firmware d'usine est la couche Fn, pas une ligne câblée).
-    ['gm610-probe', 'sh68f90', ['default'], { 'vendor_id': '0x12c9', 'product_id': '0x6001', 'wireless': 'bk3632', 'led_rows': '5', 'led_cols': '14', 'led_cx2': '13', 'led_cy2': '4' }],
+    ['gm610-probe', 'sh68f90', ['default'], { 'vendor_id': '0x12c9', 'product_id': '0x6001', 'led_rows': '5', 'led_cols': '14', 'led_cx2': '13', 'led_cy2': '4' }],
 
     # Newmen GM610 -- carte reelle : matrice 5x14, RGB par touche, brochage releve sur
     # le firmware d'usine. Voir docs/keyboards/gm610.md.
     #
-    # 'wireless': 'bk3632' : reactive le 2026-09-13, avec la garde de kb.c qui
-    # empeche de servir la radio pendant une enumeration USB -- sans elle, le
-    # clavier echoue sur GET_DESCRIPTOR(CONFIGURATION). Voir docs/keyboards/gm610.md.
-    ['gm610', 'sh68f90', ['default'], { 'vendor_id': '0x12c9', 'product_id': '0x6001', 'wireless': 'bk3632', 'led_rows': '5', 'led_cols': '14', 'led_cx2': '13', 'led_cy2': '4' }],
+    # ⛔ 'wireless': 'bk3632' est VOLONTAIREMENT absent -- c'est le defaut SUR.
+    #
+    # Le Bluetooth fonctionne (appairage, frappe, temoins), mais sa cohabitation
+    # avec l'USB n'est pas reglee : bb_spi.c transfere sous __critical, et l'hote
+    # finit par echouer sur GET_DESCRIPTOR. Deux gardes successives ont ete
+    # ecrites dans kb.c ; la premiere s'est revelee insuffisante sur l'appareil,
+    # la seconde n'a pas encore ete verifiee.
+    #
+    # Tout le code radio de la carte reste en place et compile : retablir cette
+    # cle suffit a le reprendre. Voir docs/keyboards/gm610.md.
+    ['gm610', 'sh68f90', ['default'], { 'vendor_id': '0x12c9', 'product_id': '0x6001', 'led_rows': '5', 'led_cols': '14', 'led_cx2': '13', 'led_cy2': '4' }],
 ]
 
 # SMK
