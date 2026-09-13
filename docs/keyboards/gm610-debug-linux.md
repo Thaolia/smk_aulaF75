@@ -128,21 +128,19 @@ lsusb -v -d 0603:1020 2>/dev/null | head -40
 ⚠️ **Il ressort seul de l'ISP par temporisation.** S'il disparaît, ce n'est pas un échec :
 relancer la bascule.
 
-### Ce qui manque encore, honnêtement
+### Flasher
 
-**Il n'existe pas encore de flasheur Linux.** Le protocole est entièrement décodé
-(effacement `0x45`, init d'écriture `0x57`, pages de 2 048 o par le report 6, armement
-`0x55`), mais le code d'écriture n'est pas écrit — délibérément : tant qu'on n'en avait
-pas besoin, le seul outil existant est en lecture seule par construction.
+✅ **`sinowisp write` fonctionne**, vérifié sur l'appareil :
 
-Deux voies quand le bootloader énumère :
+```sh
+sinowisp write -p sh68f90 build/gm610_default_smk.hex
+```
 
-1. **L'updater OEM, depuis Windows.** Il connaît `0603:1020` — la paire est codée en dur
-   dans son détecteur. Le bootloader n'allume rien et énumère peut-être là où
-   l'application échoue. C'est la voie qui n'exige aucun code neuf.
-2. **Un flasheur Python.** À écrire avec les mêmes garde-fous que `gm610_package.py` :
-   refus au-dessus de `0xEFFF`, refus du secteur marqueur `0xEE00`–`0xEFFF`, et
-   **relecture de vérification après écriture**.
+Le `.hex` de SMK **tel quel**, sans conversion — le bootloader permute les cinq octets
+lui-même.
+
+⛔ Une version de ce guide l'interdisait. `firmware_size − 5 = 0xEFFB` est l'octet
+d'armement même que teste le bootloader : il n'y avait aucun conflit de convention.
 
 ---
 
