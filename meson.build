@@ -48,7 +48,7 @@ parts = [
     #
     # Tout le code radio de la carte reste en place et compile : retablir cette
     # cle suffit a le reprendre. Voir docs/keyboards/gm610.md.
-    ['gm610', 'sh68f90', ['default'], { 'vendor_id': '0x12c9', 'product_id': '0x6001', 'led_rows': '5', 'led_cols': '14', 'led_cx2': '13', 'led_cy2': '4' }],
+    ['gm610', 'sh68f90', ['default'], { 'vendor_id': '0x12c9', 'product_id': '0x6001', 'usb_irq_priority': 'high', 'led_rows': '5', 'led_cols': '14', 'led_cx2': '13', 'led_cy2': '4' }],
 ]
 
 # SMK
@@ -354,6 +354,26 @@ foreach part : parts
             error('unsupported platform: @0@'.format(platform))
         endif
 
+        # Priorite d'interruption USB. Par defaut SMK laisse toutes les interruptions au
+        # niveau 0 : l'ISR USB ne peut donc pas preempter l'ISR systick (rendu LED).
+        # 'high' monte l'USB au niveau 3, comme le firmware d'usine du GM610.
+        #
+        # Les deux effets vont ensemble et ne doivent JAMAIS etre separes : la macro
+        # autorise l'imbrication d'ISR, et le drapeau du verificateur est ce qui fait
+        # regarder la paire USB <-> systick pour le recouvrement statique de SDCC.
+        usb_irq_priority = options.get('usb_irq_priority', '')
+        if usb_irq_priority == 'high'
+            if platform != 'sh68f90'
+                error('@0@: usb_irq_priority is only implemented for sh68f90'.format(keyboard))
+            endif
+            cc_args += '-DUSB_IRQ_HIGH_PRIORITY=1'
+            irq_priority_check_args = ['--high-priority-vector', '_INT_USB']
+        elif usb_irq_priority == ''
+            irq_priority_check_args = []
+        else
+            error('@0@: usb_irq_priority must be "high" or absent, got "@1@"'.format(keyboard, usb_irq_priority))
+        endif
+
         kb_inc_dir = 'src/keyboards/@0@'.format(keyboard)
         if fs.is_dir(kb_inc_dir)
             inc_dirs += kb_inc_dir
@@ -432,7 +452,7 @@ foreach part : parts
                        '--src', meson.current_source_dir() / 'src/platform' / platform,
                        '--asmdir', meson.current_build_dir() / '@0@smk.ihx.p'.format(prefix),
                        '--map', meson.current_build_dir() / '@0@smk.map'.format(prefix),
-                       '--stamp', '@OUTPUT@'],
+                       '--stamp', '@OUTPUT@'] + irq_priority_check_args,
         )
 
         hex_smk_target_name = '@0@smk.hex'.format(prefix)

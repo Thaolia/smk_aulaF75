@@ -119,10 +119,11 @@ plus. Aucun de ces outils ne contient d'opcode d'écriture flash.
   Deux gardes successives n'ont pas suffi. Le **mécanisme n'est pas établi** : ce README a
   longtemps accusé les fenêtres `__critical` de `bb_spi.c`, à tort — seul le chemin de
   réception y passe, sur quatre octets, et les dix sites d'émission ne prennent aucun verrou.
-  La piste la mieux étayée, jamais essayée, est ailleurs : SMK laisse **toutes** les
-  interruptions au niveau 0, donc l'ISR USB ne peut pas préempter le rendu LED, là où le
-  firmware d'usine met l'USB seul au niveau 3 et épingle Timer2 en bas. Détail et réserves
-  dans [docs/keyboards/gm610.md](docs/keyboards/gm610.md).
+  La piste la mieux étayée est ailleurs : SMK laissait **toutes** les interruptions au
+  niveau 0, donc l'ISR USB ne pouvait pas préempter le rendu LED, là où le firmware d'usine
+  met l'USB seul au niveau 3 et épingle Timer2 en bas. C'est **implémenté** depuis le
+  2026-09-13 (option `usb_irq_priority`), et **à éprouver sur l'appareil**. Détail, coût et
+  réserves dans [docs/keyboards/gm610.md](docs/keyboards/gm610.md).
 - **Le `Maj` gauche** qui ne déclenchait pas l'accord PgPréc/PgSuiv alors que le droit le
   faisait. Contourné en acceptant les deux, **pas expliqué**.
 - Six cases vides de la rangée basse, et le report vendeur 12 (macros) : jamais testés.

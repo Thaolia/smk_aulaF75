@@ -51,6 +51,26 @@ void usb_hw_init(void)
     USBIE1  = (_OVERIE | _SETUPIE | _SOFIA | _RESMIE | _SUSPIE | _PBRSTIE);
     USBIE2  = (_OEP0IE | _IEP0IE);
     USBCON  = (_ENUSB | _SW1CON);
+
+#ifdef USB_IRQ_HIGH_PRIORITY
+    /*
+     * USB au niveau 3, le plus haut, pour qu'il préempte l'ISR systick (rendu LED,
+     * 2 kHz). Le firmware d'usine du GM610 fait exactement cela : sa routine 0x922C
+     * active Timer2, l'épingle au niveau 0, puis monte l'USB seul au niveau 3.
+     *
+     * Ce levier suppose Timer2 au niveau 0 : c'est la valeur au reset, et rien dans
+     * l'arbre n'écrit IPH0/IPL0 -- vérifié. Une carte qui voudrait relever Timer2
+     * annulerait ce réglage en silence.
+     *
+     * ⚠️ L'imbrication d'ISR que cela autorise n'est PAS gratuite : le recouvrement
+     * statique de SDCC ne la modélise pas. La carte qui pose cette macro DOIT aussi
+     * déclarer son vecteur haute priorité au vérificateur (meson : usb_irq_priority),
+     * sinon utils/check_interrupts.py laisse passer une collision USB <-> systick.
+     */
+    IPH1 |= _PUSBH;
+    IPL1 |= _PUSBL;
+#endif
+
     IEN1 |= _EUSB;
 }
 

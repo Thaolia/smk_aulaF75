@@ -523,6 +523,72 @@ SBIT(PSPIL, 0xB8, 6);
 #define _ES0   (1u << 6)
 /**@}*/
 
+/*
+ * Priorités d'interruption. Chaque source occupe le MÊME bit dans son registre de
+ * priorité que dans son registre d'activation : IPH0/IPL0 recopient IEN0, IPH1/IPL1
+ * recopient IEN1. Le niveau est le couple (IPH, IPL), de 0 (le plus bas, la valeur
+ * au reset) à 3 (le plus haut).
+ *
+ * Corroboré trois fois plutôt que supposé :
+ *   - les SBIT de IPL0 déjà présents plus bas (PT2L bit 0 … PSPIL bit 6) suivent
+ *     exactement l'ordre de IEN0 ;
+ *   - sur la sh68f881 de la même famille, _EUSB, _PUSBH et _PUSBL valent tous 1 << 4 ;
+ *   - le firmware d'usine du GM610 écrit `MOV IEN1,#0x01` puis, trois instructions
+ *     plus loin, `MOV IPH1,#0x01` / `MOV IPL1,#0x01` (routine 0x922C).
+ */
+
+/**
+ * \name Bits from register IPH0
+ * @{
+ */
+#define _PT2H  (1u << 0)
+#define _PX4H  (1u << 1)
+#define _PX3H  (1u << 2)
+#define _PX2H  (1u << 3)
+#define _PSCMH (1u << 4)
+#define _PLPDH (1u << 5)
+#define _PSPIH (1u << 6)
+/**@}*/
+
+/**
+ * \name Bits from register IPL0
+ * @{
+ */
+#define _PT2L  (1u << 0)
+#define _PX4L  (1u << 1)
+#define _PX3L  (1u << 2)
+#define _PX2L  (1u << 3)
+#define _PSCML (1u << 4)
+#define _PLPDL (1u << 5)
+#define _PSPIL (1u << 6)
+/**@}*/
+
+/**
+ * \name Bits from register IPH1
+ * @{
+ */
+#define _PUSBH  (1u << 0)
+#define _PPWM0H (1u << 1)
+#define _PPWM1H (1u << 2)
+#define _PPWM2H (1u << 3)
+#define _PPWM3H (1u << 4)
+#define _PPWM4H (1u << 5)
+#define _PS0H   (1u << 6)
+/**@}*/
+
+/**
+ * \name Bits from register IPL1
+ * @{
+ */
+#define _PUSBL  (1u << 0)
+#define _PPWM0L (1u << 1)
+#define _PPWM1L (1u << 2)
+#define _PPWM2L (1u << 3)
+#define _PPWM3L (1u << 4)
+#define _PPWM4L (1u << 5)
+#define _PS0L   (1u << 6)
+/**@}*/
+
 /**
  * \name Bits from registers P0, P0CR, P0PCR
  * @{
