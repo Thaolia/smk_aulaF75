@@ -48,7 +48,7 @@ parts = [
     #
     # Tout le code radio de la carte reste en place et compile : retablir cette
     # cle suffit a le reprendre. Voir docs/keyboards/gm610.md.
-    ['gm610', 'sh68f90', ['default'], { 'vendor_id': '0x12c9', 'product_id': '0x6001', 'wireless': 'bk3632', 'usb_irq_priority': 'high', 'led_rows': '5', 'led_cols': '14', 'led_cx2': '13', 'led_cy2': '4' }],
+    ['gm610', 'sh68f90', ['default'], { 'vendor_id': '0x12c9', 'product_id': '0x6001', 'wireless': 'bk3632', 'usb_irq_priority': 'high', 'macro_store': true, 'led_rows': '5', 'led_cols': '14', 'led_cx2': '13', 'led_cy2': '4' }],
 ]
 
 # SMK
@@ -176,7 +176,8 @@ possible_src_keyboard = [
     'aula_macro.c',
     'aula_status.c',
     'aula_layout.c',
-    'gm610_layout.c'
+    'gm610_layout.c',
+    'gm610_macro.c'
 ]
 
 possible_src_layout = [
@@ -352,6 +353,13 @@ foreach part : parts
             endif
         elif wireless != ''
             error('unsupported platform: @0@'.format(platform))
+        endif
+
+        # Stockage macro configurable (GM610) : blob dans user_settings, collection
+        # HID report ID 8, handlers. Pose pour la seule carte qui le demande, afin de
+        # ne pas gonfler le blob NVM des autres (sh68f881 : 252 o).
+        if options.get('macro_store', false)
+            cc_args += '-DMACRO_STORE_ENABLE=1'
         endif
 
         # Priorite d'interruption USB. Par defaut SMK laisse toutes les interruptions au

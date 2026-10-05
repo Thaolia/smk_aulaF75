@@ -5,6 +5,9 @@
 #endif
 
 _Static_assert(sizeof(user_settings_t) <= NVM_CAPACITY, "user_settings_t too large for the settings record");
+// La longueur du record NVM tient sur un octet (nvm.c) et est tronquée en (uint8_t)
+// ci-dessous : au-delà de 255 octets, la sauvegarde serait silencieusement coupée.
+_Static_assert(sizeof(user_settings_t) <= 255u, "user_settings_t exceeds the 1-byte NVM record length");
 
 user_settings_t user_settings;
 

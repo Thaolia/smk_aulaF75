@@ -12,6 +12,12 @@
 #    include "rf_controller.h"
 #endif
 
+#ifdef MACRO_STORE_ENABLE
+#    include "gm610_macro.h"
+#endif
+
+extern uint8_t action_layer; // matrix.c : couche active (0 = base), lu par le mode macro
+
 /*
  * ═══════════════════════════════════════════════════════════════════════════
  * Le mode de liaison
@@ -195,6 +201,12 @@ static void conn_restore_once(void)
         rf_kbd_lazy_state_init();
     }
 #endif
+
+#ifdef MACRO_STORE_ENABLE
+    // Les settings sont chargés (restore_settings a tourné avant ce 1er kb_update) :
+    // construire le bitmap des touches porteuses d'une macro.
+    gm610_macro_init();
+#endif
 }
 
 /*
@@ -278,6 +290,20 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
         hold_done    = true;
     }
 
+#ifdef MACRO_STORE_ENABLE
+    /*
+     * En mode macro, sur la couche de base (action_layer == 0), une touche porteuse
+     * d'une macro est jouée par le moteur et avalée ; sinon l'évènement poursuit son
+     * chemin normal. Hissé AVANT le switch pour couvrir les keycodes de base qui ont
+     * un case dédié -- KC_DOWN est en couche de base (pavé fléché). Un combo Fn
+     * (action_layer != 0) n'est jamais détourné : MACRO_TG reste traité par le switch.
+     */
+    if (gm610_macro_mode() && action_layer == 0 &&
+        gm610_macro_trigger(keycode, key_pressed)) {
+        return false;
+    }
+#endif
+
     switch (keycode) {
         case KC_UP:
         case KC_DOWN:
@@ -347,6 +373,14 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             } else if (hold_keycode == keycode) {
                 dprintf("hold release\r\n");
                 hold_keycode = 0;
+            }
+            return false;
+#endif
+
+#ifdef MACRO_STORE_ENABLE
+        case MACRO_TG:
+            if (key_pressed) {
+                gm610_macro_toggle();
             }
             return false;
 #endif
@@ -465,6 +499,11 @@ void kb_update(void)
     // Vide la file d'émission de la compensation AZERTY. Doit rester dans la
     // boucle principale : `send_keyboard_report()` est injoignable depuis une ISR.
     gm610_layout_task();
+
+#ifdef MACRO_STORE_ENABLE
+    // Même contrainte : la lecture des macros émet ses rapports ici, jamais en ISR.
+    gm610_macro_task();
+#endif
 
     if (hold_keycode && !hold_done) {
         if ((uint8_t)(indicators_ticks - hold_start) < LNK_HOLD_TICKS) {

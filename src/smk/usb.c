@@ -8,6 +8,8 @@
 #include "usbhidreport.h"
 #include "kbdef.h"
 #include "console.h"
+#include "report.h"
+#include "macro_store.h"
 #include "keyboard.h"
 #include "delay.h"
 #include <stdint.h>
@@ -51,6 +53,9 @@ typedef enum {
     USB_EP0_STATE_LED         = 0x04,
     USB_EP0_STATE_ISP         = 0x05,
     USB_EP0_STATE_CONSOLE     = 0x06,
+#if defined(MACRO_STORE_ENABLE)
+    USB_EP0_STATE_MACRO       = 0x07,
+#endif
 } usb_ep0_state_t;
 
 const uint8_t hid_report_desc_keyboard[] = {
@@ -143,6 +148,20 @@ const uint8_t hid_report_desc_extra[] = {
         HID_RI_REPORT_COUNT(8, 5),
         HID_RI_FEATURE(8, HID_IOF_DATA | HID_IOF_VARIABLE | HID_IOF_ABSOLUTE),
     HID_RI_END_COLLECTION(0),
+
+#if defined(MACRO_STORE_ENABLE)
+    HID_RI_USAGE_PAGE(16, 0xff00),        // Vendor
+    HID_RI_USAGE(8, 0x02),                // Config macro GM610 (distincte d'ISP, 0x01)
+    HID_RI_COLLECTION(8, 0x01),           // Application
+        HID_RI_REPORT_ID(8, REPORT_ID_MACRO),
+        HID_RI_USAGE(8, 0x03),
+        HID_RI_LOGICAL_MINIMUM(8, 0x00),
+        HID_RI_LOGICAL_MAXIMUM(16, 0x00ff),
+        HID_RI_REPORT_SIZE(8, 8),
+        HID_RI_REPORT_COUNT(8, MACRO_FEATURE_REPORT_SIZE),
+        HID_RI_FEATURE(8, HID_IOF_DATA | HID_IOF_VARIABLE | HID_IOF_ABSOLUTE),
+    HID_RI_END_COLLECTION(0),
+#endif
 
 #if DEBUG == 1
     HID_RI_USAGE_PAGE(16, 0xff31),        // Vendor (console page)
@@ -354,7 +373,7 @@ static void usb_get_endpoint_status_handler(struct usb_req_setup *req);
 static void usb_get_descriptor_handler(struct usb_req_setup *req);
 static void usb_get_configuration_handler();
 static void usb_get_interface_handler();
-static void usb_hid_get_report_handler();
+static void usb_hid_get_report_handler(struct usb_req_setup *req);
 static void usb_hid_set_report_handler(struct usb_req_setup *req);
 static void usb_hid_set_idle_handler(struct usb_req_setup *req);
 static void usb_hid_get_idle_handler();
@@ -647,7 +666,7 @@ static void usb_setup_irq()
         case (USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_IFACE):
             switch (request) {
                 case USB_HID_REQ_GET_REPORT:
-                    usb_hid_get_report_handler();
+                    usb_hid_get_report_handler(&req);
                     break;
 
                 case USB_HID_REQ_GET_IDLE:
@@ -1074,8 +1093,17 @@ static void usb_get_interface_handler()
     SET_EP0_IN_RDY;
 }
 
-static void usb_hid_get_report_handler()
+static void usb_hid_get_report_handler(struct usb_req_setup *req)
 {
+#if defined(MACRO_STORE_ENABLE)
+    if ((req->wValue >> 8) == REPORT_TYPE_FEATURE && (req->wValue & 0xff) == REPORT_ID_MACRO) {
+        macro_hid_fill_get(EP0_IN_BUF); // [id, 7 octets du blob au curseur]
+        SET_EP0_CNT(8);
+        SET_EP0_IN_RDY;
+        return;
+    }
+#endif
+    (void)req;
     STALL_EP0();
 }
 
@@ -1095,6 +1123,12 @@ static void usb_hid_set_report_handler(struct usb_req_setup *req)
                 usb_ep0_state = USB_EP0_STATE_ISP;
                 SET_EP0_OUT_RDY;
             }
+#if defined(MACRO_STORE_ENABLE)
+            else if ((req->wValue & 0xff) == REPORT_ID_MACRO) {
+                usb_ep0_state = USB_EP0_STATE_MACRO;
+                SET_EP0_OUT_RDY;
+            }
+#endif
 #if DEBUG == 1
             else if ((req->wValue & 0xff) == REPORT_ID_CONSOLE) {
                 usb_ep0_state = USB_EP0_STATE_CONSOLE;
@@ -1166,6 +1200,15 @@ void usb_ep0_out_irq()
         if (EP0_OUT_BUF[0] == 0x05 && EP0_OUT_BUF[1] == 0x75) {
             usb_isp_requested = 1;
         }
+#if defined(MACRO_STORE_ENABLE)
+    } else if (usb_ep0_state == USB_EP0_STATE_MACRO) {
+        usb_ep0_state = 0;
+
+        macro_hid_receive(EP0_OUT_BUF);
+
+        CLEAR_EP0_CNT;
+        SET_EP0_IN_RDY;
+#endif
 #if DEBUG == 1
     } else if (usb_ep0_state == USB_EP0_STATE_CONSOLE) {
         usb_ep0_state = 0;

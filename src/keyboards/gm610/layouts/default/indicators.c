@@ -13,6 +13,9 @@
 #ifdef RF_ENABLED
 #    include "rf_controller.h"
 #endif
+#ifdef MACRO_STORE_ENABLE
+#    include "gm610_macro.h"
+#endif
 #include <string.h>
 
 /*
@@ -302,6 +305,15 @@ void indicators_boot_announce(void)
         render_dirty = true;
     }
 }
+
+#ifdef MACRO_STORE_ENABLE
+// Demande un repeint : bascule du mode macro, ou commit qui change la liste des
+// touches porteuses. `render_dirty` est privé à ce module.
+void indicators_request_render(void)
+{
+    render_dirty = true;
+}
+#endif
 
 void indicators_toggle_diag(void)
 {
@@ -749,6 +761,18 @@ static void led_regen_one(void)
     }
 #endif
 
+#ifdef MACRO_STORE_ENABLE
+    // Surbrillance des touches porteuses d'une macro, UNIQUEMENT en mode macro.
+    // Écrase l'effet courant sur ces cases, comme le fait le sélecteur de liaison.
+    if (gm610_macro_mode() && gm610_macro_has_key(regen_row, regen_col)) {
+        uint8_t hc[3];
+        gm610_macro_hi_color(hc);
+        r = hc[0];
+        g = hc[1];
+        b = hc[2];
+    }
+#endif
+
     led_fb[regen_row][0][regen_col] = SCALE_BRI(r);
     led_fb[regen_row][1][regen_col] = SCALE_BRI(g);
     led_fb[regen_row][2][regen_col] = SCALE_BRI(b);
@@ -931,6 +955,9 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 
     led_react_poll();
     gm610_layout_tick(); // base de temps du module de disposition (~400 µs)
+#ifdef MACRO_STORE_ENABLE
+    gm610_macro_tick(); // minuteur de lecture des macros (décrément seul)
+#endif
 
     bool wrapped = false;
     if (++led_color >= 3) {

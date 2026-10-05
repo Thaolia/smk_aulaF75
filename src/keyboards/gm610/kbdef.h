@@ -267,5 +267,8 @@ enum custom_keycodes {
      */
     LAYOUT_AZ,
 
+    // Fn + Caps : bascule le mode macro (voir gm610_macro.c).
+    MACRO_TG,
+
     KB_SAFE_RANGE,
 };
