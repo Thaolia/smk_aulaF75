@@ -786,15 +786,32 @@ next:
     }
 }
 
+// Rendu incrémental : cases repeintes par appel de indicators_render(). Borne le
+// temps passé hors de matrix_task à ~1 ms au lieu des ~7-15 ms d'une trame entière,
+// pour que la boucle revienne au clavier avant qu'un tap puisse se collapser.
+#define LED_REGEN_CHUNK 8
+
 void indicators_render(void)
 {
-    if (!render_dirty) {
+    // Une trame est « en cours » tant que le curseur n'est pas revenu à l'origine :
+    // on la termine alors même si render_dirty est retombé entre-temps.
+    const bool frame_in_progress = (regen_row != 0 || regen_col != 0);
+
+    if (!render_dirty && !frame_in_progress) {
         return;
     }
-    render_dirty = false; // remis à zéro d'abord : une avance de phase le réarme
 
-    for (uint8_t i = 0; i < (uint8_t)(LED_ROWS * LED_COLS); i++) {
+    // Début d'une nouvelle trame : consommer la demande MAINTENANT, pour qu'une
+    // avance de phase survenue pendant la trame réarme bien la suivante.
+    if (!frame_in_progress) {
+        render_dirty = false;
+    }
+
+    for (uint8_t i = 0; i < LED_REGEN_CHUNK; i++) {
         led_regen_one();
+        if (regen_row == 0 && regen_col == 0) {
+            break; // trame complète : le curseur a bouclé
+        }
     }
 }
 
@@ -874,8 +891,9 @@ static void fx_tick(void)
      */
     {
         static uint8_t fade;
-        static uint8_t fade_last; // dernier battement vu
-        uint8_t        k;         // 0..255, position dans le fondu
+        static uint8_t fade_last;              // dernier battement vu
+        uint8_t        k;                      // 0..255, position dans le fondu
+        bool           fade_advanced = false;  // vrai seulement quand le fondu change de pas
 
         /*
          * ⚠️ Avancer sur le BATTEMENT (30 ms), pas sur la trame (7,5 ms).
@@ -883,7 +901,8 @@ static void fx_tick(void)
          * donnerait 100 trames = 0,75 s, pas les 3 s demandées.
          */
         if (indicators_ticks != fade_last) {
-            fade_last = indicators_ticks;
+            fade_last     = indicators_ticks;
+            fade_advanced = true;
             if (++fade >= LAKE_FADE_TICKS) {
                 fade = 0;
             }
@@ -895,8 +914,12 @@ static void fx_tick(void)
         lake_base_r = (uint8_t)(LAKE_R_LO + (((uint16_t)(LAKE_R_HI - LAKE_R_LO) * k) >> 8));
         lake_base_b = (uint8_t)(LAKE_B_HI - (((uint16_t)(LAKE_B_HI - LAKE_B_LO) * k) >> 8));
 
-        if (user_settings.led_effect == GM_FX_LAKE) {
-            render_dirty = true; // le fond bouge : il faut repeindre
+        if (user_settings.led_effect == GM_FX_LAKE && fade_advanced) {
+            // Le fond ne bouge qu'au battement (~33 Hz) : repeindre alors seulement,
+            // pas à chaque trame — sinon on régénère les 70 cases 66-133 fois/s pour
+            // un fondu que l'œil ne voit changer qu'à 33 Hz. Les gouttes, elles,
+            // continuent d'être repeintes par le bloc vitesse (avance de led_phase).
+            render_dirty = true;
         }
     }
 
