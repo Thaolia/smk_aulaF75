@@ -99,9 +99,15 @@ void main(void)
 
         kb_update_switches();
         kb_update();
-        matrix_task();
+        const bool kb_active = matrix_task();
 
-        indicators_render();
+        // Priorité aux frappes : tant qu'on vient de traiter des touches ou qu'un
+        // scan frais attend (matrix_updated posé par l'ISR), on saute le repeint des
+        // 70 cases pour revenir au clavier au plus vite. L'ISR continue d'afficher le
+        // dernier framebuffer : l'effet se fige le temps de la rafale, il ne noircit pas.
+        if (!kb_active && !matrix_updated) {
+            indicators_render();
+        }
 
         usb_task();
         settings_task();
