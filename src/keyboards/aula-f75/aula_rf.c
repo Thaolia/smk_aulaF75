@@ -903,51 +903,55 @@ static void rf_cap_replay(void)
 #define RF_WHY_ANN   3
 #define RF_WHY_BULK  4
 
+static uint8_t rf_rx_frame_len(void)
+{
+    switch (rx_buf[0]) {
+        case RF_RX_TYPE_STATUS:   return (rx_buf[1] == RF_CMD_STATUS) ? RF_RX_LEN_STATUS : RF_RX_LEN_ACK;
+        case RF_RX_TYPE_ANNOUNCE: return RF_RX_LEN_ACK;
+        case RF_RX_TYPE_BULK:     return RF_RX_LEN_BULK;
+        default:                  return 0; /* type inconnu : octet parasite */
+    }
+}
+
+static void rf_rx_classify(void)
+{
+    const uint8_t type = rx_buf[0];
+    if (type == RF_RX_TYPE_BULK) {
+        /* Conteneur à sous-commandes : rien n'en dépend dans ce portage. */
+        rf_rx_dump(RF_WHY_BULK);
+        return;
+    }
+    if (type == RF_RX_TYPE_STATUS && rx_buf[1] == RF_CMD_STATUS && rx_buf[2] == 0) {
+        rf_status_apply();
+        rf_rx_dump(RF_WHY_OK02);
+        return;
+    }
+    rf_rx_dump(RF_WHY_ANN);
+}
+
 static void rf_rx_consume(void)
 {
     /* Plusieurs trames peuvent avoir atterri : on en traite jusqu'à quatre par
-     * passage, assez pour suivre la cadence du module sans monopoliser la boucle. */
-    for (uint8_t guard = 0; guard < 4 && rx_pending; guard++) {
-        uint8_t len;
-
-        switch (rx_buf[0]) {
-            case RF_RX_TYPE_STATUS:
-                len = (rx_buf[1] == RF_CMD_STATUS) ? RF_RX_LEN_STATUS : RF_RX_LEN_ACK;
-                break;
-            case RF_RX_TYPE_ANNOUNCE:
-                len = RF_RX_LEN_ACK;
-                break;
-            case RF_RX_TYPE_BULK:
-                len = RF_RX_LEN_BULK;
-                break;
-            default:
-                rf_rx_take(1); /* octet parasite : recaler, pas tout jeter */
-                continue;
-        }
-
-        if (rx_idx < len) {
-            return; /* trame incomplète : laisser le reste arriver */
-        }
-        if (!rf_rx_checksum_ok((uint8_t)(len - 1))) {
+     * passage, assez pour suivre la cadence du module sans monopoliser la boucle.
+     * Flot aplati (un seul drapeau d'arrêt, aucun continue/return dans la boucle)
+     * et switch/classement isolés dans rf_rx_frame_len()/rf_rx_classify() : réunis,
+     * ils font trébucher l'optimiseur SDCC 4.5.0 (error 110). Logique identique à la
+     * transcription d'origine. */
+    uint8_t stop = 0;
+    for (uint8_t guard = 0; !stop && guard < 4 && rx_pending; guard++) {
+        uint8_t len = rf_rx_frame_len();
+        if (len == 0) {
+            rf_rx_take(1); /* octet parasite : recaler, pas tout jeter */
+        } else if (rx_idx < len) {
+            stop = 1;      /* trame incomplète : laisser le reste arriver */
+        } else if (!rf_rx_checksum_ok((uint8_t)(len - 1))) {
             rf_rx_dump(RF_WHY_BAD02);
             rf_rx_take(1);
-            continue;
-        }
-
-        /* Somme juste : le module a parlé, et proprement. C'est ce que la sonde
-         * de présence attend, quelle que soit la trame. */
-        probe_answered = 1;
-
-        if (rx_buf[0] == RF_RX_TYPE_STATUS && rx_buf[1] == RF_CMD_STATUS && rx_buf[2] == 0) {
-            rf_status_apply();
-            rf_rx_dump(RF_WHY_OK02);
-        } else if (rx_buf[0] == RF_RX_TYPE_BULK) {
-            /* Conteneur à sous-commandes : rien n'en dépend dans ce portage. */
-            rf_rx_dump(RF_WHY_BULK);
         } else {
-            rf_rx_dump(RF_WHY_ANN);
+            probe_answered = 1; /* somme juste : le module a parlé, et proprement */
+            rf_rx_classify();
+            rf_rx_take(len);
         }
-        rf_rx_take(len);
     }
 }
 
